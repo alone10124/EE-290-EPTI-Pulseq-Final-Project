@@ -1,0 +1,13 @@
+*~
+*swp
+*.so
+*.asv
+build/
+.DS_Store
+.idea/
+.project
+.cproject
+cmake/cpack_options.cmake
+.vscode/
+*.ipynb
+*.h5

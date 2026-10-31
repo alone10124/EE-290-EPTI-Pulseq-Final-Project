@@ -1,0 +1,25 @@
+name: ismrmrd
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - boost=1.80.0
+  - cmake=3.21.3             # dev
+  - fftw=3.3.9
+  - gcc_linux-64=11.2.0      # dev
+  - gdb=11.1                 # dev
+  - gxx_linux-64=11.2.0      # dev
+  - h5py=3.2.1               # dev
+  - hdf5=1.10.6
+  - jupyter=1.0.0            # dev
+  - libblas=*=*mkl           # dev
+  - matplotlib=3.4.3         # dev
+  - mkl>=2022.0.0            # dev
+  - mkl-include>=2022.0.0    # dev
+  - ninja=1.10.2             # dev
+  - numpy=1.22.1             # dev
+  - pugixml=1.12.1
+  - pyfftw=0.12.0            # dev
+  - python=3.9               # dev
+  - scipy=1.7.1              # dev
+  - xsdata=22.2              # dev
