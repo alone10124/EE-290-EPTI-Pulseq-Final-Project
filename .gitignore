@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+.venv/
+
+# Generated outputs (simulated raw data, recon results, figures)
+out/*
+!out/.gitkeep
+
+# MATLAB reference-script output folders (copy the .seq files you need into tests/ref/)
+legacy/sequences/seq/
+*.asv
