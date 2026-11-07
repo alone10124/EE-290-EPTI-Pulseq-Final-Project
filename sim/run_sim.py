@@ -1,89 +1,71 @@
-"""Simulate the EPTI calibration + imaging scans with KomaMRI and write ISMRMRD raw data.
+"""Simulate any .seq file with KomaMRI on the brain phantom (the same for every sequence).
 
-    python sequences/scripts/make_epti.py config/sim_small.yaml       # 1. make the .seq files
-    python sim/run_sim.py config/sim_small.yaml                       # 2. simulate them
+    python sim/run_sim.py sequences/simple_epi_sim.seq            # -> out/simple_epi_sim/raw.npz and truth.npz
 
-Writes, under out/sim/:
-    <config>_calib.h5, <config>_imaging.h5   ISMRMRD raw data (same input format the recon will take from the scanner)
-    <config>_truth.npz                        ground-truth proton density, T2* and B0 maps on the recon grid
+The phantom gets one brain slice at each z position the sequence excites. They are read from the .seq file's
+[DEFINITIONS] (``SlicePositions`` in m, plus ``FOV`` and ``MatrixSize`` for the ground-truth maps); command-line
+options override them or fill them in for .seq files that don't define them.
 
-Both scans use the same phantom and receive coils, as on a real scanner. Use --gpu on a machine with an NVIDIA GPU
-(CUDA). On the Radeon 780M laptop, run on the CPU threads (the default).
+Simulating the whole sequence costs time proportional to its duration times the number of spins, so simulate a
+short version: e.g. write the sequence with only one or two slices (``--slices`` in the sequence scripts).
+
+Outputs:
+* ``raw.npz``: ``signal`` [n_adc_samples, n_coils], every ADC sample in acquisition order (complex).
+* ``truth.npz``: ``rho``, ``t2s`` (s), ``b0_hz`` maps [slice, y, x] on the recon grid, and ``slice_positions``
+  (increasing z). See ``mrtools.sim.phantom``.
 """
 
 import argparse
-import sys
-import time
 from pathlib import Path
 
 import numpy as np
+import pypulseq as pp
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import phantom as ph  # noqa: E402  (sets the juliacall environment variables before komamripy is imported)
-
-from epti.config import load_config  # noqa: E402
-from epti.seq.imaging import excited_slice_positions  # noqa: E402
+from mrtools.hardware import GE_MR750W
+from mrtools.sim import phantom as ph
+from mrtools.sim.koma import simulate
 
 REPO = Path(__file__).resolve().parents[1]
 
 
-def simulate(obj, seq_path, scanner, gpu):
-    import komamripy as km
-    from juliacall import Main as jl
-
-    seq = km.read_seq(str(seq_path))
-    params = jl.seval("(gpu) -> Dict{String,Any}(\"return_type\" => \"raw\", \"gpu\" => gpu)")(gpu)
-    t0 = time.time()
-    raw = km.simulate(obj, seq, scanner, sim_params=params)
-    return raw, time.time() - t0
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("config", type=Path)
-    parser.add_argument("--seqdir", type=Path, default=REPO / "sequences", help="where make_epti.py wrote the .seq files")
-    parser.add_argument("--outdir", type=Path, default=REPO / "out" / "sim")
-    parser.add_argument("--ss", type=int, default=2, help="phantom subsampling of the 0.5 mm grid (2 -> 1 mm spins)")
+    parser.add_argument("seq", type=Path, help=".seq file to simulate")
+    parser.add_argument("--slices-mm", type=float, nargs="+", help="phantom slice z positions (mm)")
+    parser.add_argument("--fov-mm", type=float, nargs=2, help="ground-truth map FOV x y (mm)")
+    parser.add_argument("--matrix", type=int, nargs=2, help="ground-truth map matrix nx ny")
     parser.add_argument("--ncoils", type=int, default=8)
-    parser.add_argument("--fat", choices=["water", "3T"], default="water")
+    parser.add_argument("--spin-subsampling", type=int, default=1,
+                        help="phantom spin spacing = 0.5 mm * this; keep it well below the voxel size")
+    parser.add_argument("--fat", choices=["water", "3T"], default="water",
+                        help='"water": no fat chemical shift; "3T": fat at -3.4 ppm (so fat-sat has something to do)')
     parser.add_argument("--b0-scale", type=float, default=1.0, help="scale of the synthetic B0 map (0 = off)")
     parser.add_argument("--gpu", action="store_true", help="simulate on an NVIDIA GPU (CUDA)")
-    parser.add_argument("--only", choices=["calib", "imaging"], help="simulate just one of the two scans")
     args = parser.parse_args(argv)
 
-    cfg = load_config(args.config)
-    stem = args.config.stem
-    if cfg.imaging.slice_groups is None:
-        print("warning: the config plays every slice group; the simulation will be slow. See config/sim_small.yaml.")
-    slices = excited_slice_positions(cfg.imaging, cfg.imaging.slice_groups)
-    args.outdir.mkdir(parents=True, exist_ok=True)
+    seq = pp.Sequence()
+    seq.read(str(args.seq))
+    d = seq.definitions
+    positions = (np.asarray(args.slices_mm) * 1e-3 if args.slices_mm is not None
+                 else np.atleast_1d(d["SlicePositions"]))
+    positions = np.unique(positions)                       # increasing z, each slice once
+    fov = np.asarray(args.fov_mm) * 1e-3 if args.fov_mm else np.atleast_1d(d["FOV"])[:2]
+    matrix = args.matrix or [int(v) for v in np.atleast_1d(d["MatrixSize"])[:2]]
 
-    import komamripy as km
-    if args.gpu:
-        km.load_cuda()
+    hw = GE_MR750W
+    spins = ph.make_phantom(positions, ss=args.spin_subsampling, fat=args.fat, b0_scale=args.b0_scale, B0=hw.B0)
+    scanner = ph.make_scanner(hw, ncoils=args.ncoils)
+    print(f"phantom: {len(spins)} spins at z = {np.round(positions * 1e3, 1).tolist()} mm; {args.ncoils} coils")
+    signal, secs = simulate(args.seq, ph.to_koma(spins), scanner, gpu=args.gpu)
 
-    spins = ph.make_phantom(slices, ss=args.ss, fat=args.fat, b0_scale=args.b0_scale, B0=cfg.hardware.B0)
-    obj = ph.to_koma(spins)
-    scanner = ph.make_scanner(cfg.hardware, ncoils=args.ncoils)
-    print(f"phantom: {len(spins)} spins in {len(slices)} slices at z = {np.round(np.asarray(slices) * 1e3, 1)} mm; "
-          f"{args.ncoils} receive coils")
-
-    truth = ph.ground_truth_maps(spins, cfg.imaging.fov, (cfg.imaging.nx, cfg.imaging.ny), slices)
-    np.savez(args.outdir / f"{stem}_truth.npz", slice_positions=slices, **truth)
-
-    for scan in ("calib", "imaging"):
-        if args.only and scan != args.only:
-            continue
-        seq_path = args.seqdir / f"{stem}_{scan}.seq"
-        if not seq_path.exists():
-            raise SystemExit(f"{seq_path} not found: run sequences/scripts/make_epti.py {args.config} first")
-        raw, secs = simulate(obj, seq_path, scanner, args.gpu)
-        out = args.outdir / f"{stem}_{scan}.h5"
-        out.unlink(missing_ok=True)
-        km.save(km.ISMRMRDFile(str(out)), raw)
-        print(f"{scan}: simulated in {secs:.0f} s -> {out} ({len(raw.profiles)} acquisitions)")
-    return 0
+    out = REPO / "out" / args.seq.stem
+    out.mkdir(parents=True, exist_ok=True)
+    np.savez(out / "raw.npz", signal=signal)
+    truth = ph.ground_truth_maps(spins, fov, matrix, positions)
+    np.savez(out / "truth.npz", slice_positions=positions, **truth)
+    print(f"simulated in {secs:.0f} s: {signal.shape[0]} samples x {signal.shape[1]} coils "
+          f"-> {out.relative_to(REPO)}/raw.npz, truth.npz")
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

@@ -1,5 +1,0 @@
-# Exact MGH "P1" protocol on Siemens Prisma settings (legacy/sequences/seq_EPTI_*_P1.m).
-# Only for checking the Python port against the MATLAB-generated .seq files (tests/ref/). NOT for the GE scanner.
-hardware: siemens_prisma_ref
-imaging: {}
-calib: {}

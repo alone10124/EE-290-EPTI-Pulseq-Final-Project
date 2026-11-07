@@ -1,13 +1,8 @@
-"""Ground-truth maps of the simulation phantom (sim/phantom.py). Doesn't start Julia."""
-
-import sys
+"""Ground-truth maps of the simulation phantom (mrtools.sim.phantom). Doesn't start Julia."""
 
 import numpy as np
 
-from conftest import REPO
-
-sys.path.insert(0, str(REPO / "sim"))
-from phantom import SpinPhantom, ground_truth_maps  # noqa: E402
+from mrtools.sim.phantom import SpinPhantom, ground_truth_maps
 
 
 def _uniform_slab(spacing, df_hz=7.0, t2s=0.05):
