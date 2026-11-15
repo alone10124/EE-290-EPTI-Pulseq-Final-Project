@@ -1,0 +1,53 @@
+# Cyclic EPI on the GE MR750w. Output files are named after this file:
+#   sequences/cyclic_epi.seq, sequences/cyclic_epi_sim.seq, out/cyclic_epi_sim/
+# Run everything with:  python main.py configs/cyclic_epi.toml
+# All values are in SI units (m, s, T) unless the comment says otherwise. Protocol and hardware match simple_epi.toml.
+
+[general]
+sequence = "cyclic_epi"         # sequences/scripts/cyclic_epi.py
+recon = "cyclic_epi"            # recon/cyclic_epi.py
+
+[sequence]
+# Protocol. Any key left out falls back to the default at the top of the sequence script.
+fov = [0.220, 0.220]            # m, x (readout) and y (phase encode)
+matrix = [128, 128]             # nx, ny; ny shots of ny echoes each
+slab = 0.120                    # m, z coverage; contiguous slices
+slice_thickness = 3e-3          # m  -> 40 slices
+flip_angle = 90                 # degrees
+rf_duration = 3e-3              # s
+time_bw_product = 4
+dwell = 4e-6                    # s, ADC dwell; multiple of the 2 us ADC raster
+fat_sat = true
+tr = 0.0                        # s, volume TR (= time between shots of a slice); 0 = as short as possible
+dummy_shots = 1                 # shots without ADC before the first acquired one (T1 steady state)
+wrap_timing = "ignore"          # "ignore": short blips, rows after the wrap blip come late (recon ignores it);
+                                # "pad": every blip as long as the wrap blip, so each echo has one TE
+# Which slices to write (indices, 0 = most inferior). A subset keeps the full sequence's shot period.
+slices = "all"                  # sequences/cyclic_epi.seq, for the scanner
+sim_slices = [20]               # sequences/cyclic_epi_sim.seq, for the simulator; [] = don't write it
+
+[simulation]
+spin_subsampling = 2            # phantom spin spacing = 0.5 mm * this; keep it well below the voxel size
+ncoils = 8                      # receive channels to simulate (overrides hardware.ncoils; 128^3 samples x 32 coils is ~1 GB)
+fat = "3T"                      # "3T": fat at -3.4 ppm, so the fat-sat pulse has something to suppress; "water": no shift
+b0_scale = 1.0                  # scale of the synthetic B0 map (0 = off)
+relaxation = true               # false: no T1/T2* decay (debugging)
+
+[reconstruction]
+coil_combine = "espirit"        # "espirit" (maps from echo 0) or "rss" (magnitude only: no B0 map)
+
+[hardware]
+# GE Discovery MR750w (3 T), as in simple_epi.toml (sources there).
+name = "GE MR750w"
+B0 = 3.0                        # T
+max_grad = 44.0                 # mT/m
+max_slew = 200.0                # T/m/s
+rf_dead_time = 100e-6           # s
+rf_ringdown_time = 60e-6        # s
+adc_dead_time = 40e-6           # s
+grad_raster_time = 4e-6         # s
+rf_raster_time = 2e-6           # s
+adc_raster_time = 2e-6          # s
+block_duration_raster = 4e-6    # s
+ncoils = 32                     # receive channels on the scanner
+write_trid = true               # TRID labels at segment starts (GE pge2 needs them)

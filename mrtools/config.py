@@ -2,7 +2,7 @@
 
     [general]         which scripts to run: sequence = "<name>" (sequences/scripts/<name>.py), recon = "<name>"
     [sequence]        protocol (SI units) passed to the sequence script's ``build_sequence``, plus which slices to write
-    [simulation]      phantom options for sim/run_sim.py
+    [simulation]      phantom options for sim/run_sim.py (``ncoils`` optionally simulates fewer coils than [hardware])
     [reconstruction]  options for the recon script
     [hardware]        a ``mrtools.hardware.HardwareProfile``
 

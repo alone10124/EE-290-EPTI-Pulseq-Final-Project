@@ -14,5 +14,5 @@ out/*
 legacy/sequences/seq/
 *.asv
 
-# Short sequence versions written only for simulation (main.py)
-sequences/*_sim.seq
+# Generated sequence files: rebuild with python sequences/scripts/<name>.py configs/<run>.toml (or main.py)
+sequences/*.seq

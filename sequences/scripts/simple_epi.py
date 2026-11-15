@@ -23,8 +23,8 @@ import numpy as np
 import pypulseq as pp
 
 from mrtools import config
-from mrtools.seq.checks import check_sequence
-from mrtools.seq.common import interleaved_slice_order, make_epi_readout, make_fatsat, slice_positions, trid
+from mrtools.seq.common import (interleaved_slice_order, make_epi_readout, make_fatsat, slice_positions, trid,
+                                write_seq)
 
 
 def build_sequence(hw, fov=(220e-3, 220e-3), matrix=(128, 128), slab=120e-3, slice_thickness=3e-3, flip_angle=90,
@@ -95,15 +95,6 @@ def build_sequence(hw, fov=(220e-3, 220e-3), matrix=(128, 128), slab=120e-3, sli
     return seq
 
 
-def write(seq, path, hw):
-    print(check_sequence(seq, hw, f"{path.name} on {hw.name}"))
-    d = seq.definitions
-    print(f"{len(d['SlicePositions'])} slices {np.atleast_1d(d['SliceIndices']).astype(int).tolist()}; "
-          f"TE {d['TE']*1e3:.1f} ms, echo spacing {d['EchoSpacing']*1e6:.0f} us, duration {seq.duration()[0]:.2f} s")
-    seq.write(str(path))
-    print(f"wrote {path.relative_to(config.REPO)}\n")
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("config", help="run config, e.g. configs/simple_epi.toml")
@@ -111,10 +102,10 @@ def main(argv=None):
 
     protocol = dict(cfg.sequence)
     sim_slices = protocol.pop("sim_slices", [])
-    write(build_sequence(cfg.hardware, name=cfg.run, **protocol), cfg.seq_path, cfg.hardware)
+    write_seq(build_sequence(cfg.hardware, name=cfg.run, **protocol), cfg.seq_path, cfg.hardware)
     if sim_slices:
         protocol["slices"] = sim_slices
-        write(build_sequence(cfg.hardware, name=f"{cfg.run}_sim", **protocol), cfg.sim_seq_path, cfg.hardware)
+        write_seq(build_sequence(cfg.hardware, name=f"{cfg.run}_sim", **protocol), cfg.sim_seq_path, cfg.hardware)
 
 
 if __name__ == "__main__":

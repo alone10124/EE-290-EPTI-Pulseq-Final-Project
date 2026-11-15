@@ -6,7 +6,8 @@ Which .seq file: ``simulation.seq`` in the config, else the sim sequence (``sequ
 one. The phantom gets one brain slice at each z position the sequence excites. The geometry comes from the .seq file's
 [DEFINITIONS], since only the .seq knows which slices were actually written: ``SlicePositions`` (m), ``SliceIndices``
 (optional), ``FOV`` and ``MatrixSize`` (for the ground-truth maps), ``TE`` (optional, for the expected image).
-Phantom options come from ``[simulation]``, the scanner (incl. number of coils) from ``[hardware]``.
+Phantom options come from ``[simulation]``, the scanner (incl. number of coils) from ``[hardware]``; an optional
+``simulation.ncoils`` simulates fewer receive channels than the hardware has (raw data grows with samples x coils).
 
 Simulating the whole sequence costs time proportional to its duration times the number of spins, so simulate a
 short version (``sequence.sim_slices``).
@@ -21,6 +22,7 @@ Outputs (in the folder of ``simulation.raw``, default ``out/<seq name>/``):
 """
 
 import argparse
+import dataclasses
 
 import numpy as np
 import pypulseq as pp
@@ -35,6 +37,8 @@ def main(argv=None):
     parser.add_argument("config", help="run config, e.g. configs/simple_epi.toml")
     cfg = config.load(parser.parse_args(argv).config)
     opts, hw = cfg.simulation, cfg.hardware
+    if "ncoils" in opts:
+        hw = dataclasses.replace(hw, ncoils=int(opts["ncoils"]))
 
     seq_path = cfg.sim_input
     seq = pp.Sequence()

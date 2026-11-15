@@ -1,5 +1,5 @@
-"""Basic sequence building blocks in plain PyPulseq: fat saturation, an EPI readout lobe, TRID labels, and slice
-ordering.
+"""Basic sequence building blocks in plain PyPulseq: fat saturation, an EPI readout lobe, TRID labels, slice
+ordering, and writing a checked .seq file.
 
 Current simplifying assumption: the ADC samples only on the readout's flat top, so the
 k-space samples are evenly spaced and no ramp-sampling regridding is needed. Ramp sampling, which shortens the echo
@@ -65,3 +65,20 @@ def interleaved_slice_order(n_slices):
     saturate the next slice just before it is excited.
     """
     return np.concatenate([np.arange(0, n_slices, 2), np.arange(1, n_slices, 2)])
+
+
+def write_seq(seq, path, hw):
+    """Check ``seq`` against ``hw`` (``mrtools.seq.checks``), print a one-line summary and write it to ``path``.
+
+    The summary uses the definitions every sequence script sets: ``SlicePositions``, ``SliceIndices``, ``TE`` and
+    ``EchoSpacing``.
+    """
+    from mrtools import config
+    from mrtools.seq.checks import check_sequence
+
+    print(check_sequence(seq, hw, f"{path.name} on {hw.name}"))
+    d = seq.definitions
+    print(f"{len(np.atleast_1d(d['SlicePositions']))} slices {np.atleast_1d(d['SliceIndices']).astype(int).tolist()}; "
+          f"TE {d['TE']*1e3:.1f} ms, echo spacing {d['EchoSpacing']*1e6:.0f} us, duration {seq.duration()[0]:.2f} s")
+    seq.write(str(path))
+    print(f"wrote {path.relative_to(config.REPO)}\n")

@@ -65,7 +65,7 @@ The simulator (`sim/run_sim.py`) is shared. Then `python main.py configs/<name>.
 │   ├── seq/               # PyPulseq building blocks (EPI readout, fat-sat, slice order, TRID), hardware checks
 │   ├── sim/               # KomaMRI: brain phantom with ground truth, simulator wrapper
 │   └── recon/             # ESPIRiT coil maps, coil combination
-├── sequences/             # .seq files (for the scanner or KomaMRI)
+├── sequences/             # Generated .seq files (not tracked by git; rebuilt by the scripts)
 │   └── scripts/           # One script per sequence; builds its .seq file
 ├── sim/                   # Simulator script, shared by all sequences (+ notebook)
 ├── recon/                 # One recon script per sequence
