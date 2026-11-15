@@ -5,7 +5,9 @@ falls short in three ways, which this module fixes:
 
 * All of its spins sit in one plane at z = 0, but a multi-slice scan excites slices at other z positions. We place one copy
   at each slice position (exactly at the slice center, so there are no through-slice effects). Slices with an odd
-  global index are rotated by 90 degrees, so leakage between neighbouring slices is easy to see.
+  global index are rotated by 90 degrees, so leakage between neighbouring slices is easy to see. A consequence: z
+  gradient spoilers dephase nothing (every spin of a slice gets the same phase), so a fat-sat pulse doesn't suppress
+  fat in the simulation (fat signal ratio with/without fat-sat: 1.00 here, 0.53 with spins spread over +-1 mm).
 * A smooth synthetic B0 field map (Hz) per slice, so the simulation shows realistic EPI distortion.
 * KomaMRI's simulator ignores the phantom's ``T2s`` field: KomaMRICore only uses T2 (checked in the KomaMRICore 0.14
   source: ``T2s`` appears only in its precompile example). A gradient-echo signal decays with T2*, so we set
@@ -21,6 +23,11 @@ signal *decreases* with TE where the phantom's B0 map is positive.
 Image-grid convention (shared with the recon): maps are [slice, y, x]; pixel ``i`` of an ``n``-pixel axis sits at
 ``(i - n // 2) * fov / n``, the pixel grid of a centered FFT (``sigpy.ifft``).
 
+Ground truth on disk: sim/run_sim.py saves the spins themselves (``save_truth`` -> ``truth.npz``), with each spin's
+receive-coil sensitivity, so the file doesn't depend on any sequence or recon grid. A recon script calls ``reference``
+with its own FOV, matrix and per-spin signal weighting (its contrast: TE, TR, fat-sat, ...) to get the true maps and the
+image an ideal Cartesian scan with that contrast would give.
+
 (First written for the EPTI port; see the ``epti`` branch.)
 """
 
@@ -31,6 +38,9 @@ import numpy as np
 import mrtools.sim  # noqa: F401  (sets the juliacall environment variables before komamripy loads)
 
 GAMMA_HZ_PER_T = 42.576e6
+
+
+SPIN_FIELDS = ("x", "y", "z", "rho", "t1", "t2", "t2s", "df_hz", "slice_id", "is_fat")
 
 
 @dataclass
@@ -45,6 +55,7 @@ class SpinPhantom:
     t2s: np.ndarray
     df_hz: np.ndarray
     slice_id: np.ndarray        # index into the slice_positions passed to make_phantom
+    is_fat: np.ndarray = None   # bool per spin (None: no fat information)
 
     def __len__(self):
         return len(self.x)
@@ -93,9 +104,8 @@ def make_phantom(slice_positions, slice_indices=None, ss=4, fat="water", b0_scal
         x, y = (x0, y0) if index % 2 == 0 else (y0, -x0)
         df = b0_scale * _field_map(x, y, index) + np.where(is_fat, fat_hz, 0.0)
         parts.append(SpinPhantom(x=x, y=y, z=np.full_like(x, z), rho=rho0, t1=t10, t2=t20, t2s=t2s0,
-                                 df_hz=df, slice_id=np.full(len(x), k)))
-    return SpinPhantom(*(np.concatenate([getattr(p, f) for p in parts])
-                         for f in ("x", "y", "z", "rho", "t1", "t2", "t2s", "df_hz", "slice_id")))
+                                 df_hz=df, slice_id=np.full(len(x), k), is_fat=is_fat))
+    return SpinPhantom(*(np.concatenate([getattr(p, f) for p in parts]) for f in SPIN_FIELDS))
 
 
 def to_koma(ph: SpinPhantom, name="multi-slice brain"):
@@ -165,3 +175,44 @@ def bandlimited_image(x, y, weights, fov, n, chunk=20000):
     img = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(k)))
     spacing = np.diff(np.unique(np.round(x, 7))).min()                  # spin grid spacing (m)
     return img / (fov[0] / n[0] * fov[1] / n[1] / spacing ** 2)
+
+
+def save_truth(path, ph: SpinPhantom, slice_positions, coil_rss):
+    """Write the ground truth of a simulation: every spin (``SpinPhantom`` fields), its RSS receive sensitivity
+    ``coil_rss`` (see ``coil_rss``) and the z position of each ``slice_id``. Read it back with ``load_truth``."""
+    is_fat = ph.is_fat if ph.is_fat is not None else np.zeros(len(ph), bool)
+    fields = {f: getattr(ph, f) for f in SPIN_FIELDS if f != "is_fat"}
+    np.savez(path, **fields, is_fat=is_fat, coil_rss=coil_rss, slice_positions=np.asarray(slice_positions))
+
+
+def load_truth(path):
+    """``(SpinPhantom, coil_rss, slice_positions)`` from a file written by ``save_truth``, or ``None`` if the file is
+    missing or in the old format (maps on a grid instead of spins)."""
+    try:
+        d = np.load(path)
+    except FileNotFoundError:
+        return None
+    if "x" not in d:
+        return None
+    return SpinPhantom(**{f: d[f] for f in SPIN_FIELDS}), d["coil_rss"], d["slice_positions"]
+
+
+def reference(path, fov, matrix, weight):
+    """Ground truth for a recon on a ``fov`` / ``matrix`` grid (``matrix`` = (nx, ny)), from ``truth.npz`` at ``path``.
+
+    ``weight(spins, coil_rss)`` returns each spin's signal in an ideal scan with the recon's contrast, e.g.
+    ``spins.rho * np.exp(-te / spins.t2s) * coil_rss`` for a gradient echo at ``te``. Returns ``None`` if there is no
+    usable truth file, else a dict with ``slice_positions``, the voxel maps ``rho``, ``t2s`` (s), ``b0_hz``
+    (``ground_truth_maps``) and ``expected``: |band-limited image| of the weights (``bandlimited_image``), all
+    [slice, y, x] with slices in the order of ``slice_positions``.
+    """
+    loaded = load_truth(path)
+    if loaded is None:
+        return None
+    spins, rss, positions = loaded
+    out = ground_truth_maps(spins, fov, matrix, len(positions))
+    w = weight(spins, rss)
+    out["expected"] = np.stack([np.abs(bandlimited_image(spins.x[m], spins.y[m], w[m], fov, matrix))
+                                for m in (spins.slice_id == k for k in range(len(positions)))])
+    out["slice_positions"] = positions
+    return out

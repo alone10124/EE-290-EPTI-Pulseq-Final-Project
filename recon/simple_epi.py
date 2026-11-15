@@ -10,9 +10,9 @@ coil, combine the coils. No ghost correction, ramp-sampling regridding, B0 corre
 yet. Matrix size, slice positions and TE come from the .seq file's [DEFINITIONS].
 
 Writes ``recon.npz`` (complex images [slice, y, x], slices in increasing z) and ``recon.png`` next to the raw data.
-If the data came from the simulator (``truth.npz`` with ``expected``), the figure also shows the image an ideal
-Cartesian scan would give (``rho * exp(-TE/T2*)``, band-limited to the same k-space and shaded by the same receive
-coils; see sim/run_sim.py) and the difference, with its normalized RMS error (NRMSE) inside the head. What's left in
+If the data came from the simulator (``truth.npz``), the figure also shows the image an ideal Cartesian scan would give
+(``rho * exp(-TE/T2*)``, band-limited to the same k-space and shaded by the same receive coils; built here from the
+simulator's spins with ``mrtools.sim.phantom.reference``) and the difference, with its normalized RMS error (NRMSE) inside the head. What's left in
 that error is EPI physics (B0 distortion, T2* decay during the readout) plus any recon error.
 """
 
@@ -25,6 +25,7 @@ import sigpy as sp
 
 from mrtools import config
 from mrtools.recon.coils import coil_combine, espirit_maps
+from mrtools.sim import phantom
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -107,13 +108,14 @@ def main(argv=None):
     out.mkdir(parents=True, exist_ok=True)
     np.savez(out / "recon.npz", images=images, slice_positions=positions)
 
-    truth = np.load(out / "truth.npz") if (out / "truth.npz").exists() else None
-    if truth is not None and "expected" not in truth:
-        truth = None                                        # older truth.npz without the expected image
+    # Ground truth on this recon's grid; the ideal scan for single-shot EPI: one excitation per slice (fully relaxed)
+    # at TE, shaded by the receive coils. None without a (new-format) truth.npz.
+    fov = np.atleast_1d(d["FOV"])[:2]
+    truth = phantom.reference(out / "truth.npz", fov, (nx, ny), lambda s, rss: s.rho * np.exp(-te / s.t2s) * rss)
     errors = plot(images, positions, te, truth, out / "recon.png", method)
     for z, e in zip(positions, errors):
         print(f"z = {z*1e3:.1f} mm: NRMSE vs expected image {e:.1%}")
-    print(f"wrote {out.relative_to(config.REPO)}/recon.npz and recon.png")
+    print(f"wrote {config.display_path(out)}/recon.npz and recon.png")
 
 
 if __name__ == "__main__":

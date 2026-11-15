@@ -48,7 +48,9 @@ Shared code lives in `mrtools` and should change rarely. A new sequence `<name>`
 - `sequences/scripts/<name>.py`: takes the config path; builds `sequences/<run>.seq` (and `<run>_sim.seq` for
   `sim_slices`) from the `[sequence]` table, whose keys are its `build_sequence` arguments. It should set the
   `MatrixSize`, `FOV`, `SlicePositions` and `SliceIndices` definitions (plus whatever its recon needs).
-- `recon/<name>.py`: takes the config path and reads `config.load(...).recon_raw` / `.recon_seq`.
+- `recon/<name>.py`: takes the config path and reads `config.load(...).recon_raw` / `.recon_seq`. To compare with the
+  ground truth, it calls `mrtools.sim.phantom.reference` with its grid and its contrast (the signal each spin would give
+  in an ideal scan); the simulator's `truth.npz` holds the spins, not maps, so it works for any sequence.
 - `configs/<name>.toml`: `[general] sequence = "<name>"`.
 
 The simulator (`sim/run_sim.py`) is shared. Then `python main.py configs/<name>.toml` runs the whole workflow.

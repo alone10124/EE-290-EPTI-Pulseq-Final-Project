@@ -28,6 +28,7 @@ spin_subsampling = 1            # phantom spin spacing = 0.5 mm * this; keep it 
 fat = "water"                   # "water": fat has no chemical shift; "3T": fat at -3.4 ppm (gives fat-sat something to do)
 b0_scale = 1.0                  # scale of the synthetic B0 map (0 = off)
 relaxation = true               # false: no T1/T2* decay (debugging: isolates distortion and coil effects)
+# threads = 4                   # optional: cap KomaMRI's threads (default: all cores; each one holds a copy of the signal)
 # seq = "sequences/other.seq"   # optional: simulate this file instead (default: the sim sequence above)
 # raw = "out/other/raw.npz"     # optional: where to write the raw data (default: out/<seq name>/raw.npz)
 

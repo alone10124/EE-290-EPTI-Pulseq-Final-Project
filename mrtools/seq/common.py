@@ -81,4 +81,4 @@ def write_seq(seq, path, hw):
     print(f"{len(np.atleast_1d(d['SlicePositions']))} slices {np.atleast_1d(d['SliceIndices']).astype(int).tolist()}; "
           f"TE {d['TE']*1e3:.1f} ms, echo spacing {d['EchoSpacing']*1e6:.0f} us, duration {seq.duration()[0]:.2f} s")
     seq.write(str(path))
-    print(f"wrote {path.relative_to(config.REPO)}\n")
+    print(f"wrote {config.display_path(path)}\n")

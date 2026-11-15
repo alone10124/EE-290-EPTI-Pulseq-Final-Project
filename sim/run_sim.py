@@ -4,21 +4,22 @@
 
 Which .seq file: ``simulation.seq`` in the config, else the sim sequence (``sequences/<run>_sim.seq``), else the full
 one. The phantom gets one brain slice at each z position the sequence excites. The geometry comes from the .seq file's
-[DEFINITIONS], since only the .seq knows which slices were actually written: ``SlicePositions`` (m), ``SliceIndices``
-(optional), ``FOV`` and ``MatrixSize`` (for the ground-truth maps), ``TE`` (optional, for the expected image).
+[DEFINITIONS], since only the .seq knows which slices were actually written: ``SlicePositions`` (m) and
+``SliceIndices`` (optional). Nothing else about the sequence is needed, so this script is the same for every sequence.
 Phantom options come from ``[simulation]``, the scanner (incl. number of coils) from ``[hardware]``; an optional
-``simulation.ncoils`` simulates fewer receive channels than the hardware has (raw data grows with samples x coils).
+``simulation.ncoils`` simulates fewer receive channels than the hardware has (raw data grows with samples x coils),
+and an optional ``simulation.threads`` caps KomaMRI's threads (default: all; each thread holds a full copy of the
+signal, see ``mrtools.sim.koma.simulate``).
 
 Simulating the whole sequence costs time proportional to its duration times the number of spins, so simulate a
 short version (``sequence.sim_slices``).
 
 Outputs (in the folder of ``simulation.raw``, default ``out/<seq name>/``):
 * ``raw.npz``: ``signal`` [n_adc_samples, n_coils], every ADC sample in acquisition order (complex).
-* ``truth.npz`` (slices in increasing z, maps [slice, y, x] on the recon grid):
-  ``rho``, ``t2s`` (s), ``b0_hz`` voxel maps, ``slice_positions``, and, if TE is defined, ``expected``: the image an
-  ideal, fully sampled Cartesian scan at that TE would give after RSS-type coil combination,
-  i.e. ``rho * exp(-TE/T2*) * coil_rss`` band-limited to the k-space grid (see ``mrtools.sim.phantom``). Comparing a
-  recon with it leaves only EPI physics (B0 distortion, T2* decay during the readout) and recon errors.
+* ``truth.npz``: the ground truth as spins, not maps (``mrtools.sim.phantom.save_truth``): every spin's position,
+  rho, T1, T2, T2*, off-resonance (Hz), slice id and fat flag, its RSS receive sensitivity ``coil_rss`` (KomaMRI's coil
+  model, computed here so the recon doesn't need Julia) and ``slice_positions`` (increasing z). A recon script turns it
+  into maps and an "expected" image on its own grid and with its own contrast: ``mrtools.sim.phantom.reference``.
 """
 
 import argparse
@@ -48,27 +49,20 @@ def main(argv=None):
     indices = np.atleast_1d(d.get("SliceIndices", np.arange(len(positions)))).astype(int)
     order = np.argsort(positions)                          # increasing z
     positions, indices = positions[order], indices[order]
-    fov = np.atleast_1d(d["FOV"])[:2]
-    matrix = [int(v) for v in np.atleast_1d(d["MatrixSize"])[:2]]
 
     spins = ph.make_phantom(positions, indices, ss=opts.get("spin_subsampling", 1), fat=opts.get("fat", "water"),
                             b0_scale=opts.get("b0_scale", 1.0), B0=hw.B0, relaxation=opts.get("relaxation", True))
     scanner = hw.make_scanner()
     print(f"phantom: {len(spins)} spins, slices {indices.tolist()} at z = {np.round(positions * 1e3, 1).tolist()} mm; "
-          f"{hw.ncoils} coils; {julia_threads()} Julia threads")
-    signal, secs = simulate(seq_path, ph.to_koma(spins), scanner)
+          f"{hw.ncoils} coils; {opts.get('threads', julia_threads())} of {julia_threads()} Julia threads")
+    signal, secs = simulate(seq_path, ph.to_koma(spins), scanner, threads=opts.get("threads"))
 
     out = cfg.sim_raw.parent
     out.mkdir(parents=True, exist_ok=True)
     np.savez(cfg.sim_raw, signal=signal)
-    truth = ph.ground_truth_maps(spins, fov, matrix, len(positions))
-    if "TE" in d:
-        w = spins.rho * np.exp(-float(d["TE"]) / spins.t2s) * ph.coil_rss(scanner, spins)
-        truth["expected"] = np.stack([np.abs(ph.bandlimited_image(spins.x[m], spins.y[m], w[m], fov, matrix))
-                                      for m in (spins.slice_id == s for s in range(len(positions)))])
-    np.savez(out / "truth.npz", slice_positions=positions, **truth)
+    ph.save_truth(out / "truth.npz", spins, positions, ph.coil_rss(scanner, spins))
     print(f"simulated {seq_path.name} in {secs:.1f} s: {signal.shape[0]} samples x {signal.shape[1]} coils "
-          f"-> {cfg.sim_raw.relative_to(config.REPO)}, truth.npz")
+          f"-> {config.display_path(cfg.sim_raw)}, truth.npz")
 
 
 if __name__ == "__main__":

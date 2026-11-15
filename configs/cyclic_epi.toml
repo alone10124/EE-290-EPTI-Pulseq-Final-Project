@@ -32,6 +32,8 @@ ncoils = 8                      # receive channels to simulate (overrides hardwa
 fat = "3T"                      # "3T": fat at -3.4 ppm, so the fat-sat pulse has something to suppress; "water": no shift
 b0_scale = 1.0                  # scale of the synthetic B0 map (0 = off)
 relaxation = true               # false: no T1/T2* decay (debugging)
+# threads = 4                   # optional: cap KomaMRI's threads (default: all cores). Each thread keeps its own copy of
+                                # the signal: 128^3 samples x 8 coils is 270 MB per thread
 
 [reconstruction]
 coil_combine = "espirit"        # "espirit" (maps from echo 0) or "rss" (magnitude only: no B0 map)

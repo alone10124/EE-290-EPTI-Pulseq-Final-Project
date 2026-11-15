@@ -3,7 +3,8 @@
 import numpy as np
 import pytest
 
-from mrtools.sim.phantom import SpinPhantom, bandlimited_image, ground_truth_maps
+from mrtools.sim.phantom import (SpinPhantom, bandlimited_image, ground_truth_maps, load_truth, reference,
+                                 save_truth)
 
 
 def _uniform_slab(spacing, df_hz=7.0, t2s=0.05):
@@ -49,3 +50,25 @@ def test_bandlimited_image_of_uniform_square():
     assert np.allclose(img[c - 6:c + 7, c - 6:c + 7], w, rtol=0.05)  # inside: weight +- Gibbs ripple
     assert abs(img[0, 0]) < 0.05 * w
     assert np.allclose(img, img[::-1, ::-1][np.r_[-1, 0:n - 1]][:, np.r_[-1, 0:n - 1]], atol=1e-9)  # symmetric about c
+
+
+def test_truth_file_round_trip_and_reference(tmp_path):
+    """run_sim's truth.npz holds spins; reference() on a recon grid gives the same maps and band-limited image as
+    computing them directly, with the recon's own weighting. An old-format (maps) file gives None."""
+    spins = _uniform_slab(0.002)
+    spins.is_fat = spins.x > 0.03
+    rss = 1 + spins.y
+    save_truth(tmp_path / "truth.npz", spins, [1.5e-3], rss)
+    loaded, rss2, positions = load_truth(tmp_path / "truth.npz")
+    assert np.array_equal(loaded.x, spins.x) and np.array_equal(loaded.is_fat, spins.is_fat)
+    assert np.array_equal(rss2, rss) and positions.tolist() == [1.5e-3]
+
+    fov, n = (0.216, 0.216), (72, 72)
+    ref = reference(tmp_path / "truth.npz", fov, n, lambda s, c: s.rho * c * ~s.is_fat)
+    direct = ground_truth_maps(spins, fov, n, 1)
+    assert all(np.array_equal(ref[k], direct[k]) for k in ("rho", "t2s", "b0_hz"))
+    w = spins.rho * rss * ~spins.is_fat
+    assert np.allclose(ref["expected"][0], np.abs(bandlimited_image(spins.x, spins.y, w, fov, n)))
+
+    np.savez(tmp_path / "old.npz", rho=direct["rho"])
+    assert load_truth(tmp_path / "old.npz") is None and load_truth(tmp_path / "missing.npz") is None

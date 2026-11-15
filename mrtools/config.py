@@ -2,7 +2,8 @@
 
     [general]         which scripts to run: sequence = "<name>" (sequences/scripts/<name>.py), recon = "<name>"
     [sequence]        protocol (SI units) passed to the sequence script's ``build_sequence``, plus which slices to write
-    [simulation]      phantom options for sim/run_sim.py (``ncoils`` optionally simulates fewer coils than [hardware])
+    [simulation]      phantom options for sim/run_sim.py (optional ``ncoils``: simulate fewer coils than [hardware];
+                      optional ``threads``: cap KomaMRI's threads, default all)
     [reconstruction]  options for the recon script
     [hardware]        a ``mrtools.hardware.HardwareProfile``
 
@@ -65,6 +66,13 @@ class Config:
     @property
     def recon_raw(self):
         return self._path("reconstruction", "raw", self.sim_raw)
+
+
+def display_path(path):
+    """``path`` relative to the repo root for messages, or unchanged if it lies outside the repo (e.g. a config's
+    ``raw = "/tmp/..."`` override)."""
+    path = Path(path)
+    return path.relative_to(REPO) if path.is_relative_to(REPO) else path
 
 
 def load(path):

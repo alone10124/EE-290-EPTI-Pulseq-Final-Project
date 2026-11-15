@@ -154,6 +154,8 @@ def build_sequence(hw, fov=(220e-3, 220e-3), matrix=(128, 128), slab=120e-3, sli
     seq.set_definition("WrapDelay", round(float(t_wrap - t_blip), 9))                    # how late rows 0..j-1 of echo j are
     seq.set_definition("WrapTiming", wrap_timing)
     seq.set_definition("DummyShots", int(dummy_shots))
+    seq.set_definition("FlipAngle", float(flip_angle))                           # degrees
+    seq.set_definition("FatSat", int(bool(fat_sat)))
     seq.set_definition("ShotPeriod", float(slot * len(positions)))               # = volume TR
     return seq
 

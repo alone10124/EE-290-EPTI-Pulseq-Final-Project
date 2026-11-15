@@ -21,8 +21,9 @@ for scanner data; check it on the first scan. B0 is unambiguous for |B0| < 1 / (
 
 Writes ``recon.npz`` (``echo_images`` [slice, echo, y, x], ``te``, ``s0``, ``t2s`` (s), ``b0_hz``, ``support``; slices in
 increasing z), ``recon.png`` and ``decay.png`` next to the raw data. If the data came from the simulator (``truth.npz``),
-the figure compares echo 0 with the image an ideal Cartesian scan at that TE would give (as recon/simple_epi.py) and
-the fitted maps with the phantom's T2* and B0, and prints the errors.
+the figure compares echo 0 with the image an ideal Cartesian scan with this sequence's contrast would give
+(``ideal_signal``: T1 steady state at the shot period; fat kept, see there; built from the simulator's spins
+with ``mrtools.sim.phantom.reference``) and the fitted maps with the phantom's T2* and B0, and prints the errors.
 
 T2* and B0 fitting adapted from the team's draft recon_cyclic_epi.py (``fit_maps``, 2026-11); changes: B0 sign as
 above, B0 in Hz, slices and coils.
@@ -37,6 +38,7 @@ import sigpy as sp
 
 from mrtools import config
 from mrtools.recon.coils import coil_combine, espirit_maps
+from mrtools.sim import phantom
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -107,6 +109,26 @@ def fit_maps(images, te, threshold=0.1):
     else:
         b0_hz, s0 = None, np.exp(log_s0)
     return dict(s0=np.where(support, s0, 0), t2s=t2s, b0_hz=b0_hz, support=support)
+
+
+def ideal_signal(spins, coil_rss, definitions, te0):
+    """Each spin's signal in an ideal scan with this sequence's contrast, for the "expected" image: echo 0
+    (``te0``) in the T1 steady state of spoiled excitations every ``ShotPeriod`` with ``FlipAngle``, shaded by the
+    receive coils (``coil_rss``). Without those definitions (older .seq files): fully relaxed.
+
+    Steady state of a spoiled gradient echo: M = M0 sin(a) (1 - E1) / (1 - cos(a) E1), E1 = exp(-TR / T1).
+
+    Fat is kept even with fat-sat on: the phantom puts each slice's spins on a single z plane, so the z spoiler after
+    the fat-sat pulse can't dephase anything and the simulated fat is not suppressed (checked: fat signal with/without
+    fat-sat = 1.00 for spins on one plane, 0.53 for spins spread over +-1 mm). With a phantom that has thickness,
+    multiply by ``~spins.is_fat`` when ``definitions["FatSat"]`` is set.
+    """
+    w = spins.rho * np.exp(-te0 / spins.t2s) * coil_rss
+    if "ShotPeriod" in definitions and "FlipAngle" in definitions:
+        a = np.deg2rad(float(definitions["FlipAngle"]))
+        e1 = np.exp(-float(definitions["ShotPeriod"]) / spins.t1)
+        w = w * np.sin(a) * (1 - e1) / (1 - np.cos(a) * e1)
+    return w
 
 
 def interior(mask, n=2):
@@ -239,16 +261,15 @@ def main(argv=None):
     np.savez(out / "recon.npz", echo_images=images, te=te, slice_positions=positions, s0=stack("s0"),
              t2s=stack("t2s"), b0_hz=stack("b0_hz"), support=stack("support"))
 
-    truth = np.load(out / "truth.npz") if (out / "truth.npz").exists() else None
-    if truth is not None and "expected" not in truth:
-        truth = None
+    fov = np.atleast_1d(d["FOV"])[:2]
+    truth = phantom.reference(out / "truth.npz", fov, (nx, ny), lambda s, rss: ideal_signal(s, rss, d, te[0]))
     errors = plot(images, fits, te, positions, truth, out / "recon.png", method)
     plot_decay(images, fits, te, truth, positions, out / "decay.png")
     for z, e in zip(positions, errors):
         b0 = f", B0 median error {e['b0_hz']:.2f} Hz" if "b0_hz" in e else ""
         print(f"z = {z*1e3:.1f} mm: echo 0 NRMSE vs expected image {e['nrmse']:.1%}; "
               f"T2* median error {e['t2s_ms']:.2f} ms ({e['t2s_rel']:.1%}){b0}")
-    print(f"wrote {out.relative_to(config.REPO)}/recon.npz, recon.png and decay.png")
+    print(f"wrote {config.display_path(out)}/recon.npz, recon.png and decay.png")
 
 
 if __name__ == "__main__":
