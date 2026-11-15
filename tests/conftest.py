@@ -3,7 +3,12 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
+from mrtools import config
+
 REPO = Path(__file__).resolve().parents[1]
+CONFIG = REPO / "configs" / "simple_epi.toml"
 
 
 def load_script(relpath, module_name):
@@ -13,3 +18,14 @@ def load_script(relpath, module_name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.fixture(scope="session")
+def cfg():
+    return config.load(CONFIG)
+
+
+@pytest.fixture(scope="session")
+def hw(cfg):
+    """The GE MR750w profile from configs/simple_epi.toml."""
+    return cfg.hardware

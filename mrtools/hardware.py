@@ -1,17 +1,14 @@
-"""Scanner hardware profiles: gradient/RF limits, raster times, and Pulseq-interpreter options.
+"""Scanner hardware profile: gradient/RF limits, raster times, receive channels, and the matching KomaMRI scanner.
 
-The ``ge_mr750w`` profile holds the GE rasters and dead times for the pge2 Pulseq interpreter, and MR750w gradient
-limits. Where the values come from:
+The values for a particular scanner live in the ``[hardware]`` table of a run's config file (``configs/<run>.toml``),
+not in this package, so the same code can target different scanners. Build a profile with
+``HardwareProfile.from_dict(config["hardware"])`` (``mrtools.config.load`` does this for you).
 
-* Gradient limits: GE's published MR750w specs, 44 mT/m and 200 T/m/s per axis. ``max_slew_slow`` (120 T/m/s) is used
-  for everything except the EPI readout and blips. Confirm with the scanner facility which gradient mode is used.
-* Rasters: grad 4 us, RF 2 us, ADC 2 us (HarmonizedMRI SequenceExamples-GE/pge2 README).
-* Dead/ringdown times: rfDead >= 72 us, ringdown >= 54 us, adcDead >= 40 us are GE's minimums as documented by TOPPE
-  (``legacy/libs/toppe-main/+toppe/systemspecs.m`` L31-33 on the ``epti`` branch); we use slightly larger values.
-* Not modeled for now (see docs/LESSONS_LEARNED.md): forbidden echo spacings and peripheral nerve stimulation (PNS).
+Not modeled for now: GE's forbidden echo spacings and peripheral nerve stimulation (PNS). The ``epti`` branch has
+both (``epti/seq/checks.py``, ``epti/seq/ge_pns.py``).
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 
 import pypulseq as pp
 
@@ -20,8 +17,7 @@ import pypulseq as pp
 class HardwareProfile:
     name: str
     max_grad: float                  # mT/m
-    max_slew: float                  # T/m/s, used for readout lobes and blips
-    max_slew_slow: float             # T/m/s, a gentler limit for RF, spoilers and prephasers (lowers nerve stimulation)
+    max_slew: float                  # T/m/s
     rf_dead_time: float              # s
     rf_ringdown_time: float          # s
     adc_dead_time: float             # s
@@ -30,24 +26,47 @@ class HardwareProfile:
     adc_raster_time: float           # s
     block_duration_raster: float     # s
     B0: float                        # T
+    ncoils: int                      # receive channels (the simulator's coil array uses this many)
     write_trid: bool = True          # TRID labels marking segment starts (required by GE pge2)
 
-    def opts(self, slow: bool = False) -> pp.Opts:
-        """PyPulseq system limits; ``slow=True`` uses ``max_slew_slow``."""
+    @classmethod
+    def from_dict(cls, d):
+        """Profile from a config's ``[hardware]`` table. Missing or unknown keys raise an error, so typos don't pass
+        silently."""
+        names = {f.name for f in fields(cls)}
+        unknown = set(d) - names
+        if unknown:
+            raise ValueError(f"unknown [hardware] keys: {sorted(unknown)}; allowed: {sorted(names)}")
+        return cls(**d)
+
+    def opts(self) -> pp.Opts:
+        """PyPulseq system limits."""
         return pp.Opts(
             max_grad=self.max_grad, grad_unit="mT/m",
-            max_slew=self.max_slew_slow if slow else self.max_slew, slew_unit="T/m/s",
+            max_slew=self.max_slew, slew_unit="T/m/s",
             rf_ringdown_time=self.rf_ringdown_time, rf_dead_time=self.rf_dead_time,
             adc_dead_time=self.adc_dead_time, adc_raster_time=self.adc_raster_time,
             grad_raster_time=self.grad_raster_time, block_duration_raster=self.block_duration_raster,
             rf_raster_time=self.rf_raster_time, B0=self.B0,
         )
 
+    def make_scanner(self, coil_radius=0.15, coil_half_length=0.12):
+        """KomaMRI ``Scanner`` with this profile's limits and an ``ncoils``-channel receive array.
 
-GE_MR750W = HardwareProfile(
-    name="ge_mr750w",
-    max_grad=44.0, max_slew=200.0, max_slew_slow=120.0,
-    rf_dead_time=100e-6, rf_ringdown_time=60e-6, adc_dead_time=40e-6,
-    grad_raster_time=4e-6, rf_raster_time=2e-6, adc_raster_time=2e-6, block_duration_raster=4e-6,
-    B0=3.0, write_trid=True,
-)
+        KomaMRI's ``BirdcageCoilSens`` gives one receive channel per rung (so it's an array, despite the name): ideal
+        wires on a cylinder of ``coil_radius`` (m) and half-length ``coil_half_length`` (m). It's a stand-in for the
+        real head coil, so its geometry is a simulation choice rather than part of the hardware description. Its
+        sensitivity is symmetric in z, so two slices at +-z see the same coil maps. Starts Julia on first use.
+        """
+        import mrtools.sim  # noqa: F401  (sets the juliacall environment variables before Julia starts)
+        from juliacall import Main as jl
+
+        jl.seval("using KomaMRI")
+        limits = jl.seval("(B0, Gmax, Smax, adc, dur, gr, rf, rd, rfd, adcd) -> HardwareLimits(B0=B0, Gmax=Gmax, "
+                          "Smax=Smax, ADC_Δt=adc, DUR_Δt=dur, GR_Δt=gr, RF_Δt=rf, RF_ring_down_time=rd, "
+                          "RF_dead_time=rfd, ADC_dead_time=adcd)")(
+            self.B0, self.max_grad * 1e-3, self.max_slew, self.adc_raster_time, self.block_duration_raster,
+            self.grad_raster_time, self.rf_raster_time, self.rf_ringdown_time, self.rf_dead_time, self.adc_dead_time)
+        receiver = jl.seval("(n, r, L) -> BirdcageCoilSens(ncoils=n, radius=r, L=L)")(
+            self.ncoils, coil_radius, coil_half_length)
+        return jl.seval("(lim, rx) -> Scanner(limits=lim, receiver=rx)")(limits, receiver)

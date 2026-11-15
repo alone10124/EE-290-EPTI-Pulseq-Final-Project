@@ -1,0 +1,55 @@
+# Simple EPI on the GE MR750w. Output files are named after this file:
+#   sequences/simple_epi.seq, sequences/simple_epi_sim.seq, out/simple_epi_sim/
+# Run everything with:  python main.py configs/simple_epi.toml
+# All values are in SI units (m, s, T) unless the comment says otherwise.
+
+[general]
+sequence = "simple_epi"         # sequences/scripts/simple_epi.py
+recon = "simple_epi"            # recon/simple_epi.py
+
+[sequence]
+# Protocol. Any key left out falls back to the default at the top of the sequence script.
+fov = [0.220, 0.220]            # m, x (readout) and y (phase encode)
+matrix = [128, 128]             # nx, ny
+slab = 0.120                    # m, z coverage; contiguous slices
+slice_thickness = 3e-3          # m  -> 40 slices
+flip_angle = 90                 # degrees
+rf_duration = 3e-3              # s
+time_bw_product = 4
+dwell = 4e-6                    # s, ADC dwell; multiple of the 2 us ADC raster
+fat_sat = true
+tr = 0.0                        # s, volume TR; 0 = as short as possible
+# Which slices to write (indices, 0 = most inferior).
+slices = "all"                  # sequences/simple_epi.seq, for the scanner
+sim_slices = [20]               # sequences/simple_epi_sim.seq, for the simulator; [] = don't write it
+
+[simulation]
+spin_subsampling = 1            # phantom spin spacing = 0.5 mm * this; keep it well below the voxel size
+fat = "water"                   # "water": fat has no chemical shift; "3T": fat at -3.4 ppm (gives fat-sat something to do)
+b0_scale = 1.0                  # scale of the synthetic B0 map (0 = off)
+relaxation = true               # false: no T1/T2* decay (debugging: isolates distortion and coil effects)
+# seq = "sequences/other.seq"   # optional: simulate this file instead (default: the sim sequence above)
+# raw = "out/other/raw.npz"     # optional: where to write the raw data (default: out/<seq name>/raw.npz)
+
+[reconstruction]
+coil_combine = "espirit"        # "espirit" (coil maps from the data itself) or "rss" (root-sum-of-squares)
+# seq = "sequences/simple_epi_sim.seq"   # optional (default: the simulated sequence)
+# raw = "out/simple_epi_sim/raw.npz"     # optional (default: the simulator's output)
+
+[hardware]
+# GE Discovery MR750w (3 T). Gradient limits: GE's published specs. Rasters: HarmonizedMRI SequenceExamples-GE/pge2
+# README. Dead/ringdown times: GE minimums are rfDead >= 72 us, ringdown >= 54 us, adcDead >= 40 us (TOPPE
+# systemspecs.m L31-33, on the `epti` branch); we use slightly larger values.
+name = "GE MR750w"
+B0 = 3.0                        # T
+max_grad = 44.0                 # mT/m
+max_slew = 200.0                # T/m/s
+rf_dead_time = 100e-6           # s
+rf_ringdown_time = 60e-6        # s
+adc_dead_time = 40e-6           # s
+grad_raster_time = 4e-6         # s
+rf_raster_time = 2e-6           # s
+adc_raster_time = 2e-6          # s
+block_duration_raster = 4e-6    # s
+ncoils = 32                     # receive channels
+write_trid = true               # TRID labels at segment starts (GE pge2 needs them)

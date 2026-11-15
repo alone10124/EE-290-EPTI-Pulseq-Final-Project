@@ -1,13 +1,15 @@
-"""Numerical phantom and scanner for simulating multi-slice EPI scans with KomaMRI.
+"""Numerical phantom for simulating multi-slice EPI scans with KomaMRI, and its ground truth.
 
 Builds on KomaMRI's ``brain_phantom2D`` (BrainWeb-based, 0.5 mm native grid). For multi-slice EPI the default phantom alone
 falls short in three ways, which this module fixes:
 
 * All of its spins sit in one plane at z = 0, but a multi-slice scan excites slices at other z positions. We place one copy
-  at each slice position, every other one rotated by 90 degrees so leakage between slices is easy to see.
+  at each slice position (exactly at the slice center, so there are no through-slice effects). Slices with an odd
+  global index are rotated by 90 degrees, so leakage between neighbouring slices is easy to see.
 * A smooth synthetic B0 field map (Hz) per slice, so the simulation shows realistic EPI distortion.
-* KomaMRI's simulator ignores the phantom's ``T2s`` field (KomaMRICore only uses T2). A gradient-echo signal decays
-  with T2*, so we set ``T2 := T2*``, i.e. intravoxel dephasing is modeled as a mono-exponential decay.
+* KomaMRI's simulator ignores the phantom's ``T2s`` field: KomaMRICore only uses T2 (checked in the KomaMRICore 0.14
+  source: ``T2s`` appears only in its precompile example). A gradient-echo signal decays with T2*, so we set
+  ``T2 := T2*``, i.e. intravoxel dephasing is modeled as a mono-exponential decay.
 
 Fat: the phantom's fat offset is hard-coded for 1.5 T. By default fat spins are treated as water (``fat="water"``),
 which keeps validation simple; ``fat="3T"`` puts them at -3.4 ppm at the scanner's B0 so a fat-sat pulse has something
@@ -16,18 +18,17 @@ to suppress.
 Sign convention: KomaMRI precesses an off-resonance of +df Hz as ``exp(-i 2 pi df t)``, so the phase of the simulated
 signal *decreases* with TE where the phantom's B0 map is positive.
 
-Returns plain NumPy arrays alongside the KomaMRI objects, so the ground truth can be compared with reconstructions.
+Image-grid convention (shared with the recon): maps are [slice, y, x]; pixel ``i`` of an ``n``-pixel axis sits at
+``(i - n // 2) * fov / n``, the pixel grid of a centered FFT (``sigpy.ifft``).
+
 (First written for the EPTI port; see the ``epti`` branch.)
 """
 
-import os
 from dataclasses import dataclass
 
 import numpy as np
 
-# KomaMRI/juliacall settings must be in place before the first `import komamripy` (see README).
-os.environ.setdefault("PYTHON_JULIACALL_THREADS", "auto")
-os.environ.setdefault("PYTHON_JULIACALL_HANDLE_SIGNALS", "yes")
+import mrtools.sim  # noqa: F401  (sets the juliacall environment variables before komamripy loads)
 
 GAMMA_HZ_PER_T = 42.576e6
 
@@ -43,7 +44,7 @@ class SpinPhantom:
     t2: np.ndarray
     t2s: np.ndarray
     df_hz: np.ndarray
-    slice_id: np.ndarray        # index into slice_positions
+    slice_id: np.ndarray        # index into the slice_positions passed to make_phantom
 
     def __len__(self):
         return len(self.x)
@@ -60,37 +61,44 @@ def _field_map(x, y, slice_index):
     return hot + lin
 
 
-def make_phantom(slice_positions, ss=4, fat="water", b0_scale=1.0, B0=3.0):
-    """Build the multi-slab phantom.
+def make_phantom(slice_positions, slice_indices=None, ss=4, fat="water", b0_scale=1.0, B0=3.0, relaxation=True):
+    """Build the multi-slice phantom.
 
     Parameters
     ----------
     slice_positions : z positions (m) of the slices to fill, e.g. ``(-0.0315, 0.0315)``.
+    slice_indices : the global index of each slice (the sequence's ``SliceIndices``). Odd indices get the rotated
+        phantom and the second field map, so a slice looks the same whichever subset is simulated. Default: 0, 1, ...
     ss : KomaMRI subsampling of the 0.5 mm BrainWeb grid (4 -> 2 mm spin spacing, ~6.5k spins per slice).
     fat : "water" (fat spins get no chemical shift) or "3T" (-3.4 ppm at ``B0``).
     b0_scale : multiplies the synthetic field map (0 turns B0 inhomogeneity off).
+    relaxation : False sets T1, T2 and T2* to 1000 s (no decay), for debugging.
     """
     import komamripy as km
 
+    if slice_indices is None:
+        slice_indices = range(len(slice_positions))
     base = km.brain_phantom2D(ss=ss)
     x0, y0 = np.asarray(base.x, dtype=float), np.asarray(base.y, dtype=float)
     rho0, t10 = np.asarray(base.ρ, dtype=float), np.asarray(base.T1, dtype=float)
     t20, t2s0 = np.asarray(base.T2, dtype=float), np.asarray(base.T2s, dtype=float)
+    if not relaxation:
+        t10, t20, t2s0 = (np.full_like(t10, 1e3) for _ in range(3))
     is_fat = np.asarray(base.Δw, dtype=float) != 0
     fat_hz = -3.4e-6 * GAMMA_HZ_PER_T * B0 if fat == "3T" else 0.0
 
     parts = []
-    for k, z in enumerate(slice_positions):
-        # every other slice is rotated by 90 degrees: (x, y) -> (y, -x)
-        x, y = (x0, y0) if k % 2 == 0 else (y0, -x0)
-        df = b0_scale * _field_map(x, y, k) + np.where(is_fat, fat_hz, 0.0)
+    for k, (z, index) in enumerate(zip(slice_positions, slice_indices)):
+        # odd slices are rotated by 90 degrees: (x, y) -> (y, -x)
+        x, y = (x0, y0) if index % 2 == 0 else (y0, -x0)
+        df = b0_scale * _field_map(x, y, index) + np.where(is_fat, fat_hz, 0.0)
         parts.append(SpinPhantom(x=x, y=y, z=np.full_like(x, z), rho=rho0, t1=t10, t2=t20, t2s=t2s0,
                                  df_hz=df, slice_id=np.full(len(x), k)))
     return SpinPhantom(*(np.concatenate([getattr(p, f) for p in parts])
                          for f in ("x", "y", "z", "rho", "t1", "t2", "t2s", "df_hz", "slice_id")))
 
 
-def to_koma(ph: SpinPhantom, name="multi-slab brain"):
+def to_koma(ph: SpinPhantom, name="multi-slice brain"):
     """KomaMRI ``Phantom``. T2 is set to T2* because KomaMRI's simulator does not use the T2s field (see module doc)."""
     import komamripy as km
     from juliacall import Main as jl
@@ -100,44 +108,60 @@ def to_koma(ph: SpinPhantom, name="multi-slab brain"):
                       T2=vec(ph.t2s), T2s=vec(ph.t2s), Δw=vec(2 * np.pi * ph.df_hz))
 
 
-def make_scanner(hw, ncoils=8, coil_radius=0.15, coil_half_length=0.12):
-    """KomaMRI ``Scanner`` with the hardware profile's limits and a multi-channel receive array.
+def coil_rss(scanner, ph: SpinPhantom):
+    """Root-sum-of-squares receive sensitivity ``sqrt(sum_c |S_c|^2)`` at each spin, scaled to a median of 1.
 
-    ``BirdcageCoilSens`` gives one receive channel per rung (so it's an array, despite the name). Several coils are
-    needed for parallel imaging and for simultaneous multi-slice methods. Its sensitivity is symmetric in z, so two
-    slices at +-z see the same coil maps.
-    ``hw`` is a ``mrtools.hardware.HardwareProfile``.
+    Uses KomaMRI's own coil model (``get_sens`` of the scanner's receiver), i.e. exactly what the simulation used.
+    Both RSS and ESPIRiT/SENSE-1 coil combination return the object multiplied by this (ESPIRiT's maps are normalized
+    to unit length across coils), which is why images are brighter near the coils.
     """
     from juliacall import Main as jl
 
-    jl.seval("using KomaMRI")
-    limits = jl.seval("(B0, Gmax, Smax, adc, dur, gr, rf, rd, rfd, adcd) -> HardwareLimits(B0=B0, Gmax=Gmax, Smax=Smax, "
-                      "ADC_Δt=adc, DUR_Δt=dur, GR_Δt=gr, RF_Δt=rf, RF_ring_down_time=rd, RF_dead_time=rfd, "
-                      "ADC_dead_time=adcd)")(
-        hw.B0, hw.max_grad * 1e-3, hw.max_slew, hw.adc_raster_time, hw.block_duration_raster, hw.grad_raster_time,
-        hw.rf_raster_time, hw.rf_ringdown_time, hw.rf_dead_time, hw.adc_dead_time)
-    receiver = jl.seval("(n, r, L) -> BirdcageCoilSens(ncoils=n, radius=r, L=L)")(ncoils, coil_radius, coil_half_length)
-    return jl.seval("(lim, rx) -> Scanner(limits=lim, receiver=rx)")(limits, receiver)
+    sens = jl.seval("(rx, x, y, z) -> get_sens(rx, collect(Float64, x), collect(Float64, y), collect(Float64, z))")(
+        scanner.receiver, ph.x, ph.y, ph.z)
+    rss = np.sqrt((np.abs(np.asarray(sens)) ** 2).sum(axis=1))
+    return rss / np.median(rss)
 
 
-def ground_truth_maps(ph: SpinPhantom, fov, n, slice_positions):
-    """Proton density, T2* (s) and B0 (Hz) on the reconstruction grid, one map per slice.
+def pixel_edges(fov, n):
+    """Bin edges whose centers are the centered-FFT pixel positions ``(i - n // 2) * fov / n``."""
+    return (np.arange(n + 1) - n // 2 - 0.5) * fov / n
 
-    Spins are binned into ``n x n`` voxels over ``fov`` (centered at 0). Proton density is the mean over the spins in
-    each voxel; a plain sum would turn the spin-grid/voxel-grid mismatch into a checkerboard. T2* and B0 are
-    rho-weighted voxel averages.
-    Map axes are [slice, y, x] with x and y increasing along the array axes.
+
+def ground_truth_maps(ph: SpinPhantom, fov, n, n_slices):
+    """Proton density, T2* (s) and B0 (Hz) on the reconstruction grid, one map per slice (``slice_id``).
+
+    Spins are binned into ``n x n`` voxels over ``fov`` on the FFT pixel grid (see module doc). Proton density is the
+    mean over the spins in each voxel; a plain sum would turn the spin-grid/voxel-grid mismatch into a checkerboard.
+    T2* and B0 are rho-weighted voxel averages. Map axes are [slice, y, x].
     """
-    edges = np.linspace(-fov[0] / 2, fov[0] / 2, n[0] + 1), np.linspace(-fov[1] / 2, fov[1] / 2, n[1] + 1)
-    out = {k: np.zeros((len(slice_positions), n[1], n[0])) for k in ("rho", "t2s", "b0_hz")}
-    for s in range(len(slice_positions)):
+    bins = pixel_edges(fov[1], n[1]), pixel_edges(fov[0], n[0])
+    out = {k: np.zeros((n_slices, n[1], n[0])) for k in ("rho", "t2s", "b0_hz")}
+    for s in range(n_slices):
         m = ph.slice_id == s
-        bins = (edges[1], edges[0])
         count, _, _ = np.histogram2d(ph.y[m], ph.x[m], bins=bins)
         w, _, _ = np.histogram2d(ph.y[m], ph.x[m], bins=bins, weights=ph.rho[m])
         for key, val in (("t2s", ph.t2s[m]), ("b0_hz", ph.df_hz[m])):
             num, _, _ = np.histogram2d(ph.y[m], ph.x[m], bins=bins, weights=ph.rho[m] * val)
             out[key][s] = np.divide(num, w, out=np.zeros_like(num), where=w > 0)
         out["rho"][s] = np.divide(w, count, out=np.zeros_like(w), where=count > 0)
-    out["x_edges"], out["y_edges"] = edges
     return out
+
+
+def bandlimited_image(x, y, weights, fov, n, chunk=20000):
+    """Image of point spins as an ideal Cartesian scan would see it: the exact Fourier transform of the spins at the
+    ``n[1] x n[0]`` k-space grid points ``k = (m - n // 2) / fov``, inverse-FFT'd onto the pixel grid.
+
+    So it has the same resolution and Gibbs ringing as a fully sampled recon, unlike a box-average of the spins.
+    Scaled so that a uniform object with spin weight ``w`` comes out as ``w`` (spins per voxel divided out).
+    Returns a complex [y, x] image.
+    """
+    ky = (np.arange(n[1]) - n[1] // 2) / fov[1]
+    kx = (np.arange(n[0]) - n[0] // 2) / fov[0]
+    k = np.zeros((n[1], n[0]), complex)
+    for i in range(0, len(x), chunk):
+        s = slice(i, i + chunk)
+        k += (np.exp(-2j * np.pi * np.outer(ky, y[s])) * weights[s]) @ np.exp(-2j * np.pi * np.outer(x[s], kx))
+    img = np.fft.fftshift(np.fft.ifft2(np.fft.ifftshift(k)))
+    spacing = np.diff(np.unique(np.round(x, 7))).min()                  # spin grid spacing (m)
+    return img / (fov[0] / n[0] * fov[1] / n[1] / spacing ** 2)

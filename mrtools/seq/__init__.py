@@ -1,1 +1,1 @@
-"""Sequence building blocks (PyPulseq), SMS pulses and GE hardware checks."""
+"""Sequence building blocks (PyPulseq) and hardware checks."""

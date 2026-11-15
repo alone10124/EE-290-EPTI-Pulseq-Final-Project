@@ -1,6 +1,6 @@
 """Hardware checks for a built sequence: timing/rasters, gradient limits, TRID labels.
 
-Not checked for now (see the "add back later" table in docs/LESSONS_LEARNED.md): GE's forbidden echo spacings and
+Not checked for now: GE's forbidden echo spacings and
 peripheral nerve stimulation (PNS). The ``epti`` branch has both (``epti/seq/checks.py``, ``epti/seq/ge_pns.py``).
 """
 

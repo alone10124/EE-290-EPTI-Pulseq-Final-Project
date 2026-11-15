@@ -1,7 +1,7 @@
 """Simple EPI: multi-slice, single-shot 2D gradient-echo EPI, the baseline for building and debugging the workflow.
 
-    python sequences/scripts/simple_epi.py                                  # -> sequences/simple_epi.seq (all slices)
-    python sequences/scripts/simple_epi.py --name simple_epi_sim --slices 20   # only slice 20, for simulation
+    python sequences/scripts/simple_epi.py configs/simple_epi.toml
+    # -> sequences/simple_epi.seq (sequence.slices, for the scanner) and sequences/simple_epi_sim.seq (sim_slices)
 
 Per slice (one TRID segment):
 
@@ -9,56 +9,45 @@ Per slice (one TRID segment):
     -> ny readout lobes of alternating polarity, with a ky blip between lobes -> spoiler [-> TR padding]
 
 Slices are acquired in interleaved order (even indices first), so neighbouring slices aren't excited back to back.
-Simplifying assumptions (see docs/LESSONS_LEARNED.md): the ADC samples only on the readout flat top, the ky blips sit in
-their own short blocks between lobes, and there is no acceleration, partial Fourier or simultaneous multi-slice.
+Simplifying assumptions: the ADC samples only on the readout flat top (no ramp sampling), the ky blips sit in their
+own short blocks between lobes, and there is no acceleration, partial Fourier or simultaneous multi-slice.
 
-The [DEFINITIONS] section of the .seq file records what the simulation and recon need: FOV, matrix, the z position of
-each slice in acquisition order, TE and echo spacing.
+The protocol defaults are the keyword defaults of ``build_sequence``; the config's ``[sequence]`` table overrides
+them. The [DEFINITIONS] section of the .seq file records what the simulation and recon need: FOV, matrix, the index
+and z position of each slice in acquisition order, TE and echo spacing.
 """
 
 import argparse
-from pathlib import Path
 
 import numpy as np
 import pypulseq as pp
 
-from mrtools.hardware import GE_MR750W
+from mrtools import config
 from mrtools.seq.checks import check_sequence
 from mrtools.seq.common import interleaved_slice_order, make_epi_readout, make_fatsat, slice_positions, trid
 
-# ---- Protocol ------------------------------------------------------------------------------------------------------
-FOV = (220e-3, 220e-3)          # m, x (readout) and y (phase encode)
-MATRIX = (128, 128)             # nx, ny
-SLAB = 120e-3                   # m, z coverage; contiguous slices
-SLICE_THICKNESS = 3e-3          # m  -> 40 slices
-FLIP_ANGLE = 90                 # deg
-RF_DURATION = 3e-3              # s
-TIME_BW_PRODUCT = 4
-DWELL = 4e-6                    # s, ADC dwell; multiple of GE's 2 us ADC raster
-FAT_SAT = True
-TR = 0.0                        # s, volume TR; 0 = as short as possible
-HARDWARE = GE_MR750W
 
-REPO = Path(__file__).resolve().parents[2]
+def build_sequence(hw, fov=(220e-3, 220e-3), matrix=(128, 128), slab=120e-3, slice_thickness=3e-3, flip_angle=90,
+                   rf_duration=3e-3, time_bw_product=4, dwell=4e-6, fat_sat=True, tr=0.0, slices="all", name="simple_epi"):
+    """Build the sequence for hardware profile ``hw`` and return it.
 
-
-def build_sequence(fov=FOV, matrix=MATRIX, slab=SLAB, slice_thickness=SLICE_THICKNESS, flip_angle=FLIP_ANGLE,
-                   rf_duration=RF_DURATION, time_bw_product=TIME_BW_PRODUCT, dwell=DWELL, fat_sat=FAT_SAT, tr=TR,
-                   hw=HARDWARE, slices=None):
-    """Build the sequence and return it. ``slices`` keeps only those slice indices (for simulation); the timing,
-    including the per-slice TR padding, stays as in the full sequence."""
-    sys_fast = hw.opts()                    # EPI readout and blips
-    sys = hw.opts(slow=True)                # everything else
+    Units are SI (m, s), ``flip_angle`` in degrees, ``tr`` the volume TR (0 = shortest). ``slices`` is ``"all"`` or
+    a list of slice indices to keep (0 = most inferior), e.g. for simulation; the timing, including the per-slice TR
+    padding, stays as in the full sequence.
+    """
+    sys = hw.opts()
     nx, ny = matrix
     positions = slice_positions(slab, slice_thickness)
     order = interleaved_slice_order(len(positions))
-    keep = [int(s) for s in order if slices is None or s in slices]
+    keep = [int(s) for s in order if isinstance(slices, str) or s in slices]
+    if not keep:
+        raise ValueError(f"no slices left: {slices} vs {len(positions)} slices")
 
     rf, gz, gz_reph = pp.make_sinc_pulse(
         flip_angle=np.deg2rad(flip_angle), duration=rf_duration, slice_thickness=slice_thickness, apodization=0.5,
         time_bw_product=time_bw_product, system=sys, return_gz=True, delay=sys.rf_dead_time, use="excitation")
-    gx, adc = make_epi_readout(fov[0], nx, sys_fast, dwell=dwell)
-    blip = pp.make_trapezoid("y", system=sys_fast, area=1 / fov[1])
+    gx, adc = make_epi_readout(fov[0], nx, sys, dwell=dwell)
+    blip = pp.make_trapezoid("y", system=sys, area=1 / fov[1])
     gx_pre = pp.make_trapezoid("x", system=sys, area=-gx.area / 2)
     gy_pre = pp.make_trapezoid("y", system=sys, area=-ny / 2 / fov[1])
     spoiler = pp.make_trapezoid("z", system=sys, area=4 / slice_thickness)
@@ -80,6 +69,7 @@ def build_sequence(fov=FOV, matrix=MATRIX, slab=SLAB, slice_thickness=SLICE_THIC
         # at zero, so every slice starts with the same phase.
         rf.freq_offset = gz.amplitude * positions[s]
         rf.phase_offset = -2 * np.pi * rf.freq_offset * pp.calc_rf_center(rf)[0]
+        # Every slice is the same segment (TRID 1); only the RF frequency/phase change, which GE pge2 allows.
         if fatsat:
             seq.add_block(fatsat[0], trid(1))
             seq.add_block(fatsat[1])
@@ -95,30 +85,36 @@ def build_sequence(fov=FOV, matrix=MATRIX, slab=SLAB, slice_thickness=SLICE_THIC
         if pad > 0:
             seq.add_block(pp.make_delay(pad))
 
-    seq.set_definition("Name", "simple_epi")
+    seq.set_definition("Name", name)
     seq.set_definition("FOV", [fov[0], fov[1], slice_thickness])
     seq.set_definition("MatrixSize", [nx, ny])
-    seq.set_definition("SlicePositions", [float(positions[s]) for s in keep])   # m, in acquisition order
+    seq.set_definition("SliceIndices", keep)                                     # acquisition order
+    seq.set_definition("SlicePositions", [float(positions[s]) for s in keep])   # m, acquisition order
     seq.set_definition("TE", float(te))
     seq.set_definition("EchoSpacing", float(t_ro + t_blip))
     return seq
 
 
+def write(seq, path, hw):
+    print(check_sequence(seq, hw, f"{path.name} on {hw.name}"))
+    d = seq.definitions
+    print(f"{len(d['SlicePositions'])} slices {np.atleast_1d(d['SliceIndices']).astype(int).tolist()}; "
+          f"TE {d['TE']*1e3:.1f} ms, echo spacing {d['EchoSpacing']*1e6:.0f} us, duration {seq.duration()[0]:.2f} s")
+    seq.write(str(path))
+    print(f"wrote {path.relative_to(config.REPO)}\n")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--name", default="simple_epi", help="output file: sequences/<name>.seq")
-    parser.add_argument("--slices", type=int, nargs="+", help="keep only these slice indices (0 = most inferior)")
-    args = parser.parse_args(argv)
+    parser.add_argument("config", help="run config, e.g. configs/simple_epi.toml")
+    cfg = config.load(parser.parse_args(argv).config)
 
-    seq = build_sequence(slices=args.slices)
-    print(check_sequence(seq, HARDWARE, f"{args.name}.seq on {HARDWARE.name}"))
-    d = seq.definitions
-    n_all = len(slice_positions(SLAB, SLICE_THICKNESS))
-    print(f"{len(d['SlicePositions'])} of {n_all} slices; TE {d['TE']*1e3:.1f} ms, echo spacing "
-          f"{d['EchoSpacing']*1e6:.0f} us, duration {seq.duration()[0]:.2f} s")
-    out = REPO / "sequences" / f"{args.name}.seq"
-    seq.write(str(out))
-    print(f"wrote {out.relative_to(REPO)}")
+    protocol = dict(cfg.sequence)
+    sim_slices = protocol.pop("sim_slices", [])
+    write(build_sequence(cfg.hardware, name=cfg.run, **protocol), cfg.seq_path, cfg.hardware)
+    if sim_slices:
+        protocol["slices"] = sim_slices
+        write(build_sequence(cfg.hardware, name=f"{cfg.run}_sim", **protocol), cfg.sim_seq_path, cfg.hardware)
 
 
 if __name__ == "__main__":

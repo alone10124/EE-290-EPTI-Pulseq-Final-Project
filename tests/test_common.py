@@ -4,13 +4,12 @@ import numpy as np
 import pypulseq as pp
 import pytest
 
-from mrtools.hardware import GE_MR750W
 from mrtools.seq.checks import check_sequence
 from mrtools.seq.common import interleaved_slice_order, make_epi_readout, make_fatsat, slice_positions, trid
 
 
-def test_readout_samples_only_flat_top_and_covers_kspace():
-    sys = GE_MR750W.opts()
+def test_readout_samples_only_flat_top_and_covers_kspace(hw):
+    sys = hw.opts()
     fov, nx = 0.216, 72
     gx, adc = make_epi_readout(fov, nx, sys, dwell=4e-6)
     assert adc.num_samples == nx
@@ -20,8 +19,8 @@ def test_readout_samples_only_flat_top_and_covers_kspace():
     assert k_covered == pytest.approx(nx / fov, rel=1e-6)                         # one k-space width per lobe
 
 
-def test_fatsat_frequency():
-    sys = GE_MR750W.opts(slow=True)
+def test_fatsat_frequency(hw):
+    sys = hw.opts()
     rf, spoiler = make_fatsat(sys)
     assert rf.freq_offset == pytest.approx(-3.4e-6 * 3.0 * 42.576e6, rel=1e-3)   # about -434 Hz at 3 T
     assert spoiler.channel == "z"
@@ -41,9 +40,9 @@ def _tiny_epi(hw):
     return seq, pp.calc_duration(gx) + pp.calc_duration(gy)
 
 
-def test_ge_checks_pass_on_tiny_epi():
-    seq, _ = _tiny_epi(GE_MR750W)
-    report = check_sequence(seq, GE_MR750W, "tiny EPI")
+def test_ge_checks_pass_on_tiny_epi(hw):
+    seq, _ = _tiny_epi(hw)
+    report = check_sequence(seq, hw, "tiny EPI")
     assert report.ok, str(report)
     assert [c.name for c in report.checks][-1] == "TRID labels present"
 

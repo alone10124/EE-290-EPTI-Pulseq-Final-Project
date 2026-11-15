@@ -3,8 +3,11 @@
 The calibration data are a fully sampled k-space of each slice, e.g. single-band EPI with the same readout as the
 imaging, so the maps share its distortion. ESPIRiT (Uecker et al., MRM 2014) estimates each coil's sensitivity from the
 central ``calib_width`` lines; ``sigpy.mri.app.EspiritCalib`` does the work. Because the data are fully sampled, no
-GRAPPA step is needed (the EPTI calibration needed one only because it skipped outer k-space lines; see
-docs/LESSONS_LEARNED.md).
+GRAPPA step is needed (the EPTI calibration on the ``epti`` branch needed one only because it skipped outer k-space
+lines).
+
+Note: ESPIRiT maps are normalized to unit length across coils, so like root-sum-of-squares the combined image is the
+object times ``sqrt(sum_c |S_c|^2)`` (brighter near the coils). Removing that needs an intensity-normalization step.
 
 Conventions: k-space and images are ``[coil, y, x]``, using SigPy's centered, orthonormal FFT.
 """

@@ -5,57 +5,64 @@ single-shot, multi-slice 2D gradient-echo EPI with no acceleration or simultaneo
 Python only:
 
 1. **Sequence:** a PyPulseq script builds the `.seq` file from the building blocks in `mrtools.seq` and checks it
-   against the GE MR750w's limits.
+   against the scanner's limits.
 2. **Simulation:** KomaMRI (through `komamripy`) simulates it on a multi-coil brain phantom with known ground truth.
 3. **Reconstruction:** a recon script turns the raw signal into images (NumPy/SigPy, with helpers from `mrtools.recon`).
 
 Later, the same `.seq` file goes to the scanner. It gets converted to GE format (pge2) outside this repo.
 
-We first ported MGH's EPTI method; that work is on the **`epti` branch**. [docs/LESSONS_LEARNED.md](docs/LESSONS_LEARNED.md)
-lists what carried over, the simplifying assumptions we're making now, and where to get each removed piece back.
+We first ported MGH's EPTI method; that work (incl. SMS pulses, ramp-sampling regridding, PNS and forbidden echo
+spacing checks) is on the **`epti` branch**.
 
 ## Quick start
 
 ```bash
-python main.py simple_epi          # sequence -> simulation -> image, about 25 s on a laptop CPU
+python main.py configs/simple_epi.toml     # sequence -> simulation -> image, about 50 s on a laptop CPU
 ```
 
-`main.py` runs these four commands, which you can also run one at a time:
+Each run is described by one config file, `configs/<run>.toml`, with sections `[general]` (which scripts),
+`[sequence]` (protocol, SI units), `[simulation]`, `[reconstruction]` and `[hardware]` (the scanner, incl. number of
+receive coils). Output files are named after the config: `sequences/<run>.seq` (full, for the scanner),
+`sequences/<run>_sim.seq` (the `sim_slices` subset, for the simulator) and `out/<run>_sim/`. To try a different FOV or
+scanner with the same scripts, copy the config. See `mrtools/config.py` for the details and optional path overrides.
+
+`main.py` runs these three commands, which you can also run one at a time:
 
 ```bash
-python sequences/scripts/simple_epi.py                                     # -> sequences/simple_epi.seq (all 40 slices, for the scanner)
-python sequences/scripts/simple_epi.py --name simple_epi_sim --slices 20   # -> sequences/simple_epi_sim.seq (one slice, to simulate)
-python sim/run_sim.py sequences/simple_epi_sim.seq                         # -> out/simple_epi_sim/raw.npz, truth.npz
-python recon/simple_epi.py sequences/simple_epi_sim.seq                    # -> out/simple_epi_sim/recon.npz, recon.png
+python sequences/scripts/simple_epi.py configs/simple_epi.toml   # -> sequences/simple_epi.seq and simple_epi_sim.seq
+python sim/run_sim.py configs/simple_epi.toml                    # -> out/simple_epi_sim/raw.npz, truth.npz
+python recon/simple_epi.py configs/simple_epi.toml               # -> out/simple_epi_sim/recon.npz, recon.png
 ```
 
-`recon.png` shows each reconstructed slice next to the image the phantom should give at that TE, and their difference.
-Options: `python main.py simple_epi --sim-slices 19 20` simulates two slices; `--skip-sim` reuses the existing data.
+`python main.py configs/simple_epi.toml --skip-sim` reuses the existing raw data.
 
-The protocol (FOV, matrix, slice thickness, ...) is set by the constants at the top of
-`sequences/scripts/simple_epi.py`. The script records what the simulator and recon need (FOV, matrix, slice positions,
-TE) in the `.seq` file's `[DEFINITIONS]`, so there is no separate config file.
+`recon.png` shows each reconstructed slice next to the image an ideal, fully sampled Cartesian scan would give
+(`rho * exp(-TE/T2*)`, band-limited to the same k-space and shaded by the same receive coils), and their difference.
+What remains in that difference is EPI physics (B0 distortion, T2* decay during the readout) plus any recon error. For
+debugging, `simulation.b0_scale = 0` and `simulation.relaxation = false` turn those off (the error then drops to ~0.5%).
 
 ## Adding a new sequence
 
-Shared code lives in `mrtools` and should change rarely. A new sequence `<name>` needs two scripts:
+Shared code lives in `mrtools` and should change rarely. A new sequence `<name>` needs two scripts and a config:
 
-- `sequences/scripts/<name>.py`: builds the `.seq` file. To work with `main.py` and the simulator it should accept
-  `--name` and `--slices`, and set the `MatrixSize`, `FOV` and `SlicePositions` definitions (plus whatever its recon
-  needs).
-- `recon/<name>.py`: takes the `.seq` file and reads `out/<seq name>/raw.npz`.
+- `sequences/scripts/<name>.py`: takes the config path; builds `sequences/<run>.seq` (and `<run>_sim.seq` for
+  `sim_slices`) from the `[sequence]` table, whose keys are its `build_sequence` arguments. It should set the
+  `MatrixSize`, `FOV`, `SlicePositions` and `SliceIndices` definitions (plus whatever its recon needs).
+- `recon/<name>.py`: takes the config path and reads `config.load(...).recon_raw` / `.recon_seq`.
+- `configs/<name>.toml`: `[general] sequence = "<name>"`.
 
-The simulator (`sim/run_sim.py`) is shared. Then `python main.py <name>` runs the whole workflow.
+The simulator (`sim/run_sim.py`) is shared. Then `python main.py configs/<name>.toml` runs the whole workflow.
 
 ## Folder Structure
 
 ```
 ./
-├── main.py                # Runs the whole workflow for one sequence: python main.py <name>
-├── docs/                  # Design notes (LESSONS_LEARNED.md)
+├── main.py                # Runs the whole workflow for one config: python main.py configs/<run>.toml
+├── configs/               # One TOML file per run (protocol, simulation, recon, hardware)
 ├── mrtools/               # Shared Python package (pip install -e .)
-│   ├── hardware.py        # GE MR750w hardware profile
-│   ├── seq/               # PyPulseq building blocks (EPI readout, fat-sat, slice order, SMS pulses, CAIPI), GE checks
+│   ├── config.py          # Reads configs, file-naming rules
+│   ├── hardware.py        # HardwareProfile (limits, rasters, coils; builds the KomaMRI scanner)
+│   ├── seq/               # PyPulseq building blocks (EPI readout, fat-sat, slice order, TRID), hardware checks
 │   ├── sim/               # KomaMRI: brain phantom with ground truth, simulator wrapper
 │   └── recon/             # ESPIRiT coil maps, coil combination
 ├── sequences/             # .seq files (for the scanner or KomaMRI)
@@ -76,12 +83,12 @@ The simulator (`sim/run_sim.py`) is shared. Then `python main.py <name>` runs th
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e .                        # makes `import mrtools` work everywhere
-# NVIDIA GPU only (optional): pip install cupy-cuda12x, then add --gpu to sim/run_sim.py
 ```
 
 KomaMRI runs on a single Julia thread unless you tell it otherwise. These two settings must be in place **before**
 `komamripy` is imported (the second is required with more than one thread, or Julia can crash with a core dump).
-`mrtools.sim` sets them for you; set them yourself if you import `komamripy` directly, e.g. in a notebook.
+Importing `mrtools.sim` sets them for you (`sim/run_sim.py` prints the thread count); in a notebook, import
+`mrtools.sim` before `komamripy`, or set them yourself:
 
 ```bash
 export PYTHON_JULIACALL_THREADS=auto          # use all CPU cores
@@ -103,5 +110,5 @@ Run the tests with `pytest`.
 - **T2\***: the gradient-echo decay constant, S(TE) = S0·exp(−TE/T2\*). Fitting it from several TEs gives T2\* maps and
   the BOLD-optimal echo combination.
 - **PNS (peripheral nerve stimulation)**: fast gradient switching can stimulate nerves. GE limits it; not modeled
-  yet (see docs/LESSONS_LEARNED.md).
+  yet (the `epti` branch has a GE PNS model).
 - **TRID**: a Pulseq label marking the start of a repeating segment. GE's interpreter requires it.

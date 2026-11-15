@@ -1,7 +1,7 @@
 """Basic sequence building blocks in plain PyPulseq: fat saturation, an EPI readout lobe, TRID labels, and slice
 ordering.
 
-Current simplifying assumption (see docs/LESSONS_LEARNED.md): the ADC samples only on the readout's flat top, so the
+Current simplifying assumption: the ADC samples only on the readout's flat top, so the
 k-space samples are evenly spaced and no ramp-sampling regridding is needed. Ramp sampling, which shortens the echo
 spacing, can be added later; the ``epti`` branch has a tested regridding implementation.
 """
