@@ -145,7 +145,10 @@ def build_imaging(p: ImagingProtocol, hw: HardwareProfile):
         sys.adc_raster_time = adc.dwell      # L178: the recon reads the ADC dwell back as AdcRasterTime
     seq = pp.Sequence(system=sys)
     w = BlockWriter(seq, hw)
-    w.add(pp.make_delay(sys.block_duration_raster * 2), trid=TRID_PREAMBLE)
+    if not hw.write_trid:
+        # Short leading delay, as in the MATLAB script. Not written for GE: as its own TRID segment it would be a
+        # segment with no waveforms, which PulCeq's pge2.check() rejects ("g must be size 3xn").
+        w.add(pp.make_delay(sys.block_duration_raster * 2), trid=TRID_PREAMBLE)
     for dyn in range(p.n_dynamics):
         w.counter("SET", "SLC", 0)
         if p.n_dynamics > 1:

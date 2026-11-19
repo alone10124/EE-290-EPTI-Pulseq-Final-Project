@@ -13,3 +13,8 @@ out/*
 # MATLAB reference-script output folders (copy the .seq files you need into tests/ref/)
 legacy/sequences/seq/
 *.asv
+
+# Third-party GE converters cloned by tools/ge (see tools/ge/README.md)
+tools/ge/PulCeq/
+tools/ge/PulCeq_tv6/
+tools/ge/toppe/

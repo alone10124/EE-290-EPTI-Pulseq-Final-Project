@@ -1,0 +1,16 @@
+# Same protocol as epti_3mm_ge.yaml, with 3 dynamics (3 x TR = 6 s) in one .seq file.
+# Backup for the first scanner session: with only one dynamic, every slice group is in its first TR, before steady
+# state. Use dynamics 2-3 for T2*/B0 maps and discard dynamic 1. The calibration .seq it writes is the same scan as
+# epti_3mm_ge_calib.seq.
+hardware:
+  profile: ge_mr750w
+  max_slew: 100.0
+imaging:
+  esp: 0.600e-3
+  blip_dur: 0.168e-3
+  tr: 2.0
+  n_dynamics: 3
+calib:
+  esp: 0.600e-3
+  blip_dur: 0.168e-3
+  rf_dur: 2.048e-3

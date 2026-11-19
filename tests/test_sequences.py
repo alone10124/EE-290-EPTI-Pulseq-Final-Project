@@ -34,7 +34,7 @@ def test_ge_protocol_timing(ge_full):
     # One TR per volume. The per-group delay is rounded *up* to the raster (as in seq_EPTI_imaging_P1.m L167), so the
     # volume can run up to one raster per slice group long, plus the 2-raster preamble delay.
     slack = (21 + 2) * 4e-6
-    assert 2.0 <= ge_full.imaging.duration()[0] <= 2.0 + slack
+    assert 2.0 - 1e-9 <= ge_full.imaging.duration()[0] <= 2.0 + slack
     assert 29 * 1.2 <= ge_full.calib.duration()[0] <= 29 * 1.2 + (29 * 42 + 2) * 4e-6   # 29 PE lines x TR
     assert ge_full.imaging_info.esp == pytest.approx(600e-6)
 
@@ -48,7 +48,7 @@ def test_sim_subset_sizes(sim_small):
     _, _, _, t_adc_cal, _ = sim_small.calib.waveforms_and_times()
     assert len(t_adc_img) == 2 * 1 * 128 * n_ro                # dynamics x groups x lobes x samples
     assert len(t_adc_cal) == 29 * 2 * 17 * n_ro                # PE lines x slices x (3 nav + 14 echoes) x samples
-    assert 4.0 <= sim_small.imaging.duration()[0] <= 4.0 + 4 * 4e-6          # TR preserved per dynamic
+    assert 4.0 - 1e-9 <= sim_small.imaging.duration()[0] <= 4.0 + 4 * 4e-6   # TR preserved per dynamic (float tolerance)
 
 
 def test_definitions_needed_by_recon(ge_full):
