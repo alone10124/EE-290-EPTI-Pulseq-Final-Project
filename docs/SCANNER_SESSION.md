@@ -80,9 +80,52 @@ Isolate the problem one step at a time:
 - If the tv6 conversion is done on Windows, it needs the line-ending patch in `tools/ge/tv6_patch/` (CRLF breaks the
   entry file).
 
+## Reconstructing the scanner data
+
+There are two steps, run once per scan (calibration and imaging).
+
+**1. Export the raw file to ADC order (MATLAB).** The output goes to `out/scan/`.
+
+- **tv6 (P-file, e.g. `P12345.7`).** Pass the exact `_tv6.tar` that was run, because the P-file slot of each ADC
+  comes from its `scanloop.txt`:
+  ```powershell
+  cd tools/ge
+  ```
+  ```powershell
+  matlab -batch "ge_raw_export('C:/scan/P12345.7', '../../out/scan/calib.h5', 'tar', '../../sequences/epti_3mm_ge_calib_tv6.tar')"
+  ```
+- **pge2 (ScanArchive `.h5`).** This needs GE's Orchestra SDK for MATLAB (ask Hannah; we don't have it):
+  ```powershell
+  matlab -batch "addpath('C:/orchestra/matlab'); ge_raw_export('C:/scan/ScanArchive_calib.h5', '../../out/scan/calib.h5')"
+  ```
+
+**2. Reconstruct (Python), from the repo root.** Name the `.seq` files that were actually run:
+```powershell
+python recon/run_recon.py config/epti_3mm_ge.yaml --calib-data out/scan/calib.h5 --imaging-data out/scan/imaging.h5 --imaging-seq sequences/epti_3mm_ge_3dyn_imaging.seq --coils 12
+```
+Results go to `out/recon/` (`*_summary.png`, plus NIfTI files for T2*, the echo images and the combined image).
+- Add `--iters 20` for a quicker first look.
+- Use `--coils 12` with a 32-channel coil; leave it out for 8 channels.
+
+**If the images look wrong:** change one option at a time.
+
+| What you see | Try |
+|---|---|
+| "N ADC events, but the .seq has M" | The wrong `.seq` or `.tar` for that raw file, or extra prescan frames. Check which files were run. |
+| The two SMS slices are swapped or mixed together | `--adc-phase-sign -1` |
+| Images mirrored, or the T2*/B0 maps look like noise | `--conj` (GE receivers can use the opposite phase sign) |
+
+Verified so far, on the simulation only:
+- A fake P-file built with the tv6 converter's slot rule round-trips through the export unchanged (`tests/test_ge_raw.py`).
+- The recon on exported data is bit-identical to the recon on the original ISMRMRD file.
+
+Not verified yet:
+- Reading a real P-file header (done by TOPPE's `loadpfile`; it asks for a key press if the file size doesn't match
+  the header, which fails under `-batch`).
+- The ScanArchive path (no Orchestra SDK here).
+- Whether GE's samples per ADC equal ours (216).
+
 ## After the session
 
-- Raw data loader: P-file / ScanArchive → ISMRMRD, or a direct reader. ADC order is the same as in the `.seq`
-  (dynamic, slice group, lobe for imaging).
-- First recon: check `adc_phase_sign` and the ghost-correction sign.
+- Check `--adc-phase-sign` and `--conj` on the first data set, then write the answer into `ReconOptions` defaults.
 - Write the confirmed hardware values back into `config/epti_3mm_ge.yaml` and the `ge_mr750w` profile.

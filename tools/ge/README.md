@@ -33,3 +33,10 @@ These replace `toppe.writeentryfile` / `toppe.writecoresfile`, because they come
 - **Line endings:** `fopen(..., 'wt')` writes CRLF on Windows. The tv6 interpreter runs on Linux, and the entry
   file path check fails. The patch writes LF.
 - TOPPE branch `dev/v6` doesn't work either: its `writemod` rejects any RF block whose gradients outlast the RF.
+
+## Raw data back from the scanner
+
+`ge_raw_export.m` turns a P-file (tv6, needs the `_tv6.tar` that was run) or a ScanArchive (pge2, needs GE's Orchestra
+SDK) into a plain HDF5 file in ADC order, which `recon/run_recon.py` reads with `--calib-data` / `--imaging-data`.
+See "Reconstructing the scanner data" in [docs/SCANNER_SESSION.md](../../docs/SCANNER_SESSION.md).
+`test_raw_export.m` exists only for `tests/test_ge_raw.py`.

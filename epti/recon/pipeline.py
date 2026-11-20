@@ -23,6 +23,8 @@ class ReconOptions:
     drift_correction: bool = True    # navigator-based global B0 drift (L183-185)
     noise_std: float = 0.0           # add complex Gaussian noise to the raw data (simulation studies)
     adc_phase_sign: int = 1          # ADC phase convention for the CAIPI model (+1: Pulseq/KomaMRI); see model.py
+    conjugate_raw: bool = False      # conjugate the raw data (scanner receivers with the opposite phase convention)
+    n_coils: int | None = None       # SVD coil compression to this many virtual coils (None = off); for 32-ch coils
     solver: SolverOptions = field(default_factory=SolverOptions)
     verbose: bool = True
 
@@ -48,6 +50,20 @@ def group_slices(p_img):
     return centers[:, None] + bands[None, :]
 
 
+def coil_compression_matrix(raw, n):
+    """``[n_coil, n]`` matrix mapping physical to virtual coils: the top ``n`` principal components of the coil
+    covariance of ``raw`` (coil axis -2). A single global SVD, simpler than the original's GCC (Phase 4), which
+    compresses per readout position."""
+    x = np.moveaxis(raw, -2, -1).reshape(-1, raw.shape[-2])
+    _, _, vh = np.linalg.svd(x[:: max(1, x.shape[0] // 200000)], full_matrices=False)   # subsample: speed only
+    return vh[:n].conj().T.astype(raw.dtype)
+
+
+def compress(raw, cc):
+    """Apply a coil compression matrix along the coil axis (-2)."""
+    return np.moveaxis(np.moveaxis(raw, -2, -1) @ cc, -1, -2)
+
+
 def _match(positions, z, tol=1e-5):
     i = int(np.argmin(np.abs(np.asarray(positions) - z)))
     if abs(positions[i] - z) > tol:
@@ -68,7 +84,12 @@ def reconstruct(calib_h5, imaging_h5, calib_seq, imaging_seq, opts: ReconOptions
     group_of_calib_slice = np.array([int(np.argmin(np.abs(zs - z).min(axis=1))) for z in pc.slice_positions])
 
     # --- calibration (L61-88)
-    raw = read_calib(calib_h5, pc, noise_std=opts.noise_std, seed=1)
+    raw = read_calib(calib_h5, pc, noise_std=opts.noise_std, seed=1, conjugate=opts.conjugate_raw)
+    cc = None
+    if opts.n_coils is not None and opts.n_coils < raw.shape[-2]:
+        cc = coil_compression_matrix(raw, opts.n_coils)
+        log(f"coil compression: {raw.shape[-2]} -> {opts.n_coils} virtual coils")
+        raw = compress(raw, cc)
     pol_c = calib_polarity(3, pc.etl - 3)
     kc = regrid.regrid(raw, pol_c, pc)
     ga, gb = ghost.calib_coefficients(kc[:, :, :3], group_of_calib_slice)        # [group, coil]
@@ -86,7 +107,9 @@ def reconstruct(calib_h5, imaging_h5, calib_seq, imaging_seq, opts: ReconOptions
     phi, _ = subspace.basis(subspace.basis_times(pi), opts.k)
     pol_i = imaging_polarity(pi.n_lobes)
     ky_idx = model.ky_indices(pi, ny)
-    raw = read_imaging(imaging_h5, pi, noise_std=opts.noise_std, seed=2)
+    raw = read_imaging(imaging_h5, pi, noise_std=opts.noise_std, seed=2, conjugate=opts.conjugate_raw)
+    if cc is not None:
+        raw = compress(raw, cc)                      # same virtual coils as the calibration (coil maps come from it)
     n_dyn, n_grp = raw.shape[:2]
     ki = regrid.regrid(raw, pol_i, pi)                                           # [dyn, group, t, coil, kx]
     for g in range(n_grp):

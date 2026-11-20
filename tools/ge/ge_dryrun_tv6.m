@@ -1,11 +1,12 @@
-function ge_dryrun_tv6(seqfiles)
+function ge_dryrun_tv6(seqfiles, maxView)
 % ge_dryrun_tv6 - Convert .seq files with the older TOPPE v6 path (PulCeq branch tv6_v1.10: seq2ge -> .tar).
 %
 %   matlab -batch "cd tools/ge; ge_dryrun_tv6"
 %
 % Use this if the scanner runs the tv6 TOPPE interpreter rather than pge2. Run it in its own MATLAB session:
 % the tv6 branch has its own seq2ceq.m that must not be mixed with the pge2 one (ge_dryrun.m).
-% Writes <name>_tv6.tar next to each .seq file.
+% Writes <name>_tv6.tar next to each .seq file. maxView (default 2048) is how many ADCs go in one P-file 'slice' slot
+% before the next slot starts; ge_raw_export.m reads the mapping back from the .tar, so any value works.
 
 here = fileparts(mfilename('fullpath'));
 repo = fullfile(here, '..', '..');
@@ -19,10 +20,14 @@ if nargin < 1 || isempty(seqfiles)
                 fullfile(repo, 'sequences', 'epti_3mm_ge_imaging.seq')};
 end
 
+if nargin < 2 || isempty(maxView)
+    maxView = 2048;
+end
+
 % MR750w / XRMW limits; psd_*_wait are site-specific (Hannah's values go here).
 sysGE = toppe.systemspecs('maxGrad', 3.3, 'maxSlew', 12.0, 'gradient', 'xrmw', ...
     'psd_rf_wait', 100, 'psd_grd_wait', 100, ...
-    'rfDeadTime', 100, 'rfRingdownTime', 60, 'adcDeadTime', 40, 'maxView', 2048);
+    'rfDeadTime', 100, 'rfRingdownTime', 60, 'adcDeadTime', 40, 'maxView', maxView);
 
 allok = true;
 for k = 1:numel(seqfiles)

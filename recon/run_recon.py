@@ -4,6 +4,11 @@
     python recon/run_recon.py config/sim_small.yaml --iters 20      # faster, slightly less converged
     python recon/run_recon.py config/sim_small.yaml --noise 200     # add complex noise to the raw data first
 
+Scanner data (GE): export each raw file with tools/ge/ge_raw_export.m first, then name the files explicitly
+(see docs/SCANNER_SESSION.md, "Reconstructing the scanner data"):
+
+    python recon/run_recon.py config/epti_3mm_ge.yaml --calib-data out/scan/calib.h5 --imaging-data out/scan/imaging.h5         --imaging-seq sequences/epti_3mm_ge_3dyn_imaging.seq --coils 12
+
 Writes out/recon/<config>_recon.npz, out/recon/<config>_*.nii.gz and out/recon/<config>_summary.png. If simulation
 ground truth exists (out/sim/<config>_truth.npz), it also prints and plots the comparison with it.
 """
@@ -85,12 +90,24 @@ def main(argv=None):
     parser.add_argument("--lamda", type=float, default=1e-3, help="LLR weight (0 = no regularization)")
     parser.add_argument("--noise", type=float, default=0.0, help="std of complex noise added to the raw data")
     parser.add_argument("--device", type=int, default=-1, help="-1 = CPU, 0 = first CUDA GPU (needs cupy)")
+    scan = parser.add_argument_group("scanner data (defaults: <seqdir>/<config>_*.seq and <datadir>/<config>_*.h5)")
+    scan.add_argument("--calib-seq", type=Path, help="calibration .seq that was run")
+    scan.add_argument("--imaging-seq", type=Path, help="imaging .seq that was run")
+    scan.add_argument("--calib-data", type=Path, help="calibration raw data (ISMRMRD, or GE export from ge_raw_export.m)")
+    scan.add_argument("--imaging-data", type=Path, help="imaging raw data (ISMRMRD, or GE export)")
+    scan.add_argument("--coils", type=int, default=None, help="SVD coil compression to this many coils (32-ch: ~12)")
+    scan.add_argument("--conj", action="store_true", help="conjugate the raw data (try if images come out mirrored)")
+    scan.add_argument("--adc-phase-sign", type=int, default=1, choices=(1, -1),
+                      help="CAIPI phase convention; try -1 if the two SMS slices come out swapped")
     args = parser.parse_args(argv)
 
     stem = args.config.stem
-    seq_c, seq_i = args.seqdir / f"{stem}_calib.seq", args.seqdir / f"{stem}_imaging.seq"
-    h5_c, h5_i = args.datadir / f"{stem}_calib.h5", args.datadir / f"{stem}_imaging.h5"
-    opts = ReconOptions(noise_std=args.noise,
+    seq_c = args.calib_seq or args.seqdir / f"{stem}_calib.seq"
+    seq_i = args.imaging_seq or args.seqdir / f"{stem}_imaging.seq"
+    h5_c = args.calib_data or args.datadir / f"{stem}_calib.h5"
+    h5_i = args.imaging_data or args.datadir / f"{stem}_imaging.h5"
+    opts = ReconOptions(noise_std=args.noise, conjugate_raw=args.conj, n_coils=args.coils,
+                        adc_phase_sign=args.adc_phase_sign,
                         solver=SolverOptions(max_iter=args.iters, lamda=args.lamda, device=args.device))
     res = reconstruct(h5_c, h5_i, seq_c, seq_i, opts)
     print("timings (s):", {k: round(v, 1) for k, v in res.timings.items()})
@@ -107,7 +124,7 @@ def main(argv=None):
                res.slice_positions)
 
     truth_path = args.datadir / f"{stem}_truth.npz"
-    truth = np.load(truth_path) if truth_path.exists() else None
+    truth = np.load(truth_path) if truth_path.exists() and args.calib_data is None else None
     if truth is not None:
         for r in compare_with_truth(res, truth):
             print(f"z={r['z_mm']:+.1f} mm: T2* median error {r['t2s_median_rel_err']*100:.1f}% "
